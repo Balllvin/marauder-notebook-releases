@@ -1,0 +1,88 @@
+name: Publisher checks
+
+on:
+  pull_request_target:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publisher-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Run publisher boundary validation
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - name: Check out protected publisher policy
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/heads/main
+          path: publisher-policy
+          persist-credentials: false
+
+      - name: Check out proposed publisher code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: candidate
+          persist-credentials: false
+
+      - name: Install pinned actionlint
+        run: publisher-policy/scripts/install_actionlint.sh "$RUNNER_TEMP/actionlint-bin"
+
+      - name: Validate publisher workflows
+        run: |
+          "$RUNNER_TEMP/actionlint-bin/actionlint" \
+            candidate/.github/workflows/notebook-release-publish.yml \
+            candidate/.github/workflows/publisher-ci.yml
+
+      - name: Validate executable sources
+        working-directory: candidate
+        run: |
+          set -euo pipefail
+          python3 -m compileall -q scripts tests
+          bash -n scripts/*.sh
+          scripts/verify_openssl.sh >/dev/null
+
+      - name: Run publisher security and workflow contracts
+        working-directory: candidate
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+  report:
+    name: Report publisher validation
+    if: ${{ always() }}
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Report the required status on the exact validated commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          VALIDATION_RESULT: ${{ needs.verify.result }}
+        run: |
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          if [[ "$VALIDATION_RESULT" == "success" ]]; then
+            STATE=success
+            DESCRIPTION="Publisher boundary validation passed"
+          else
+            STATE=failure
+            DESCRIPTION="Publisher boundary validation failed"
+          fi
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state="$STATE" \
+            -f context="Verify publisher boundary" \
+            -f description="$DESCRIPTION" >/dev/null

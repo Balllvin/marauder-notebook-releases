@@ -1,6 +1,7 @@
 name: Publish verified Notebook release
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "*/5 * * * *"
 
@@ -13,6 +14,10 @@ concurrency:
 
 env:
   INTAKE_REPOSITORY: Balllvin/marauder-notebook-release-intake
+  # The checked-in default requires no Apple Developer membership. Enabling the
+  # dormant Developer ID path must be a reviewed publisher-code change.
+  NOTEBOOK_DISTRIBUTION_MODE: independent
+  NOTEBOOK_EXPECTED_TEAM_IDENTIFIER: ""
 
 jobs:
   publish:
@@ -65,40 +70,38 @@ jobs:
             echo "Ignored $IGNORED_REF_COUNT stale, malformed, or ambiguous intake refs."
           fi
           printf 'available=%s\n' "$AVAILABLE" >>"$GITHUB_OUTPUT"
-          if [[ "$AVAILABLE" == "true" ]]; then
-            printf 'branch=%s\n' "$(jq -er '.branch' "$RESULT")" >>"$GITHUB_OUTPUT"
-            printf 'commit=%s\n' "$(jq -er '.commit' "$RESULT")" >>"$GITHUB_OUTPUT"
-          else
+          if [[ "$AVAILABLE" != "true" ]]; then
             echo "No unpublished Notebook release intake is waiting."
           fi
 
       - name: Fetch inert intake data and reverify every boundary
         if: ${{ steps.intake.outputs.available == 'true' }}
         id: release
-        env:
-          INTAKE_BRANCH: ${{ steps.intake.outputs.branch }}
-          INTAKE_COMMIT: ${{ steps.intake.outputs.commit }}
         run: |
           set -euo pipefail
           git remote add intake "https://github.com/$INTAKE_REPOSITORY.git"
           git fetch --no-tags intake main:refs/remotes/intake/main
-          git fetch --no-tags intake "$INTAKE_COMMIT"
+          git fetch --no-tags intake \
+            '+refs/heads/publication/*:refs/remotes/intake/publication/*'
           OPENSSL_BIN="$(scripts/verify_openssl.sh)"
           RESULT="$RUNNER_TEMP/verified-release.json"
-          python3 scripts/prepare_intake.py prepare \
+          python3 scripts/prepare_intake.py prepare-pending \
             --repository . \
-            --commit "$INTAKE_COMMIT" \
-            --branch "$INTAKE_BRANCH" \
+            --selection "$RUNNER_TEMP/selected-intake.json" \
             --output "$RUNNER_TEMP/verified-intake" \
             --openssl "$OPENSSL_BIN" \
             --trusted-main-ref refs/remotes/intake/main \
             --result "$RESULT"
+          INVALID_COUNT="$(jq -er '.invalid_candidate_count | select(type == "number" and . >= 0 and floor == .)' "$RESULT")"
+          if [[ "$INVALID_COUNT" -gt 0 ]]; then
+            echo "Quarantined $INVALID_COUNT invalid intake candidate(s) before selecting a verified release."
+          fi
           for field in version build_number tag archive source_commit branch intake_commit; do
             value="$(jq -er --arg field "$field" '.[$field]' "$RESULT")"
             printf '%s=%s\n' "$field" "$value" >>"$GITHUB_OUTPUT"
           done
 
-      - name: Verify Developer ID, universal architecture, and notarization
+      - name: Verify the complete configured app signature
         if: ${{ steps.intake.outputs.available == 'true' }}
         env:
           ARCHIVE_NAME: ${{ steps.release.outputs.archive }}
@@ -109,29 +112,32 @@ jobs:
           ARCHIVE="$RUNNER_TEMP/verified-intake/$ARCHIVE_NAME"
           EXPANDED="$RUNNER_TEMP/expanded-release"
           mkdir "$EXPANDED"
+          python3 scripts/verify_release_archive.py --archive "$ARCHIVE"
           /usr/bin/ditto -x -k "$ARCHIVE" "$EXPANDED"
           APP="$EXPANDED/Marauder Notebook.app"
           [[ -d "$APP" && ! -L "$APP" ]]
           EXTRA_ENTRY="$(/usr/bin/find "$EXPANDED" -mindepth 1 -maxdepth 1 ! -name 'Marauder Notebook.app' -print -quit)"
           [[ -z "$EXTRA_ENTRY" ]]
-          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
-          SIGNATURE_DETAILS="$(/usr/bin/codesign -d --verbose=4 "$APP" 2>&1)"
-          grep -Fq 'Authority=Developer ID Application:' <<<"$SIGNATURE_DETAILS"
-          grep -Fq 'flags=0x10000(runtime)' <<<"$SIGNATURE_DETAILS"
-          SIGNING_IDENTIFIER="$(sed -n 's/^Identifier=//p' <<<"$SIGNATURE_DETAILS")"
-          [[ "$SIGNING_IDENTIFIER" == "com.marauder.notebook" ]]
-          TEAM_IDENTIFIER="$(sed -n 's/^TeamIdentifier=//p' <<<"$SIGNATURE_DETAILS")"
-          [[ "$TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]]
-          ENTITLEMENTS="$RUNNER_TEMP/release-entitlements.plist"
-          /usr/bin/codesign -d --entitlements :- "$APP" >"$ENTITLEMENTS" 2>/dev/null
-          python3 scripts/verify_app_bundle.py \
-            --app "$APP" \
-            --entitlements "$ENTITLEMENTS" \
-            --release-version "$RELEASE_VERSION" \
-            --build-number "$BUILD_NUMBER" \
-            --team-identifier "$TEAM_IDENTIFIER"
-          /usr/bin/xcrun stapler validate "$APP"
-          /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+          VERIFY_ARGUMENTS=(
+            --app "$APP"
+            --release-version "$RELEASE_VERSION"
+            --build-number "$BUILD_NUMBER"
+            --distribution-mode "$NOTEBOOK_DISTRIBUTION_MODE"
+          )
+          if [[ "$NOTEBOOK_DISTRIBUTION_MODE" == "developer-id" ]]; then
+            [[ "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]]
+            VERIFY_ARGUMENTS+=(
+              --expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"
+            )
+          else
+            [[ "$NOTEBOOK_DISTRIBUTION_MODE" == "independent" ]]
+            [[ -z "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER" ]]
+          fi
+          python3 scripts/verify_app_bundle.py "${VERIFY_ARGUMENTS[@]}"
+          if [[ "$NOTEBOOK_DISTRIBUTION_MODE" == "developer-id" ]]; then
+            /usr/bin/xcrun stapler validate "$APP"
+            /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+          fi
 
       - name: Enforce immutable monotonic publication
         if: ${{ steps.intake.outputs.available == 'true' }}
@@ -151,6 +157,30 @@ jobs:
           RELEASES="$RUNNER_TEMP/current-releases.json"
           gh api --paginate --slurp \
             "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$RELEASES"
+          PUBLISHED_PLAN="$RUNNER_TEMP/published-source-plan.json"
+          python3 scripts/release_state.py audit-published \
+            --releases "$RELEASES" \
+            --result "$PUBLISHED_PLAN"
+          LATEST_PUBLISHED_TAG="$(jq -er '.tags[-1] // ""' "$PUBLISHED_PLAN")"
+          SOURCE_LINK_ARGUMENTS=(
+            --manifest "$RUNNER_TEMP/verified-intake/notebook-release.json"
+            --openssl "$(scripts/verify_openssl.sh)"
+          )
+          if [[ -n "$LATEST_PUBLISHED_TAG" ]]; then
+            PREVIOUS_RELEASE="$RUNNER_TEMP/previous-signed-release"
+            mkdir "$PREVIOUS_RELEASE"
+            gh release download "$LATEST_PUBLISHED_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --pattern notebook-release.json \
+              --dir "$PREVIOUS_RELEASE"
+            [[ -f "$PREVIOUS_RELEASE/notebook-release.json" && \
+               ! -L "$PREVIOUS_RELEASE/notebook-release.json" ]]
+            SOURCE_LINK_ARGUMENTS+=(
+              --previous-manifest "$PREVIOUS_RELEASE/notebook-release.json"
+            )
+          fi
+          python3 scripts/verify_intake.py assert-source-link \
+            "${SOURCE_LINK_ARGUMENTS[@]}"
           python3 scripts/verify_intake.py assert-newer \
             --manifest "$RUNNER_TEMP/verified-intake/notebook-release.json" \
             --releases "$RELEASES"
@@ -167,237 +197,21 @@ jobs:
           INTAKE_BRANCH: ${{ steps.release.outputs.branch }}
           INTAKE_COMMIT: ${{ steps.release.outputs.intake_commit }}
         run: |
-          set -euo pipefail
           PUBLISHER_COMMIT="$(git rev-parse HEAD)"
-          OWNED_RELEASE_ID=""
-          OWNED_TAG_TARGET=""
-          PUBLISH_ATTEMPTED=false
-          cleanup_failed_draft() {
-            [[ -n "$OWNED_RELEASE_ID" ]] || return 0
-            CURRENT_RELEASE_PATH="$RUNNER_TEMP/cleanup-release.json"
-            gh api "repos/$GITHUB_REPOSITORY/releases/$OWNED_RELEASE_ID" \
-              >"$CURRENT_RELEASE_PATH" 2>/dev/null || return 0
-            python3 scripts/release_state.py cleanup-allowed \
-              --release "$CURRENT_RELEASE_PATH" \
-              --owned-release-id "$OWNED_RELEASE_ID" \
-              --tag "$RELEASE_TAG" \
-              --publish-attempted "$PUBLISH_ATTEMPTED" || return 0
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$OWNED_RELEASE_ID" >/dev/null || return 0
-          }
-          approved_publisher_commit() {
-            local target="$1"
-            [[ "$target" =~ ^[0-9a-f]{40}$ ]]
-            git merge-base --is-ancestor "$target" "$PUBLISHER_COMMIT"
-            printf '%s\n' "$target"
-          }
-          current_tag_target() {
-            local owner="${GITHUB_REPOSITORY%%/*}"
-            local repository="${GITHUB_REPOSITORY#*/}"
-            local response
-            # GraphQL variables are intentionally expanded by GitHub.
-            # shellcheck disable=SC2016
-            response="$(gh api graphql \
-              -F owner="$owner" \
-              -F name="$repository" \
-              -F qualifiedName="refs/tags/$RELEASE_TAG" \
-              -f query='query($owner: String!, $name: String!, $qualifiedName: String!) {
-                repository(owner: $owner, name: $name) {
-                  ref(qualifiedName: $qualifiedName) {
-                    target { __typename oid }
-                  }
-                }
-              }')"
-            jq -e '
-              .data.repository.ref == null or
-              (
-                .data.repository.ref.target.__typename == "Commit" and
-                (.data.repository.ref.target.oid | type == "string")
-              )
-            ' <<<"$response" >/dev/null
-            jq -r '.data.repository.ref.target.oid // empty' <<<"$response"
-          }
-          trap cleanup_failed_draft EXIT
-          [[ "$(git rev-parse HEAD)" == "$PUBLISHER_COMMIT" ]]
-          CURRENT_INTAKE_REF="$(git ls-remote --exit-code --heads \
-            "https://github.com/$INTAKE_REPOSITORY.git" \
-            "refs/heads/$INTAKE_BRANCH")"
-          [[ "$CURRENT_INTAKE_REF" == "$INTAKE_COMMIT"$'\t'"refs/heads/$INTAKE_BRANCH" ]]
-
-          NOTES="$RUNNER_TEMP/release-notes.md"
-          printf '%s\n\n%s\n%s\n' \
-            "Marauder Notebook $RELEASE_VERSION ($BUILD_NUMBER)" \
-            "Signed and notarized universal macOS application." \
-            "Source: Balllvin/marauder@$SOURCE_COMMIT" >"$NOTES"
-          INTAKE="$RUNNER_TEMP/verified-intake"
-          EXPECTED_TITLE="Marauder Notebook $RELEASE_VERSION ($BUILD_NUMBER)"
-          EXPECTED_ASSETS="$RUNNER_TEMP/expected-assets"
-          printf '%s\n' \
-            "$ARCHIVE_NAME" \
-            "$ARCHIVE_NAME.sha256" \
-            appcast.xml \
-            notebook-release.json \
-            update-feed.json \
-            | LC_ALL=C sort >"$EXPECTED_ASSETS"
-
-          APPROVED_TAG_TARGET="$(current_tag_target)"
-          if [[ -n "$APPROVED_TAG_TARGET" ]]; then
-            APPROVED_TAG_TARGET="$(approved_publisher_commit "$APPROVED_TAG_TARGET")"
-          fi
-
-          RECOVERY_RELEASES="$RUNNER_TEMP/recovery-releases.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$RECOVERY_RELEASES"
-          RECOVERY_PLAN="$RUNNER_TEMP/recovery-plan.json"
-          python3 scripts/release_state.py select-draft \
-            --releases "$RECOVERY_RELEASES" \
-            --tag "$RELEASE_TAG" \
-            --title "$EXPECTED_TITLE" \
-            --body "$NOTES" \
-            --result "$RECOVERY_PLAN"
-
-          if [[ "$(jq -er '.mode' "$RECOVERY_PLAN")" == "recover" ]]; then
-            RELEASE_ID="$(jq -er '.release_id' "$RECOVERY_PLAN")"
-            RELEASE_TARGET="$(approved_publisher_commit \
-              "$(jq -er '.target_commitish' "$RECOVERY_PLAN")")"
-            if [[ -n "$APPROVED_TAG_TARGET" ]]; then
-              [[ "$RELEASE_TARGET" == "$APPROVED_TAG_TARGET" ]]
-            else
-              APPROVED_TAG_TARGET="$RELEASE_TARGET"
-            fi
-          else
-            CREATE_TARGET="${APPROVED_TAG_TARGET:-$PUBLISHER_COMMIT}"
-            CREATE_PAYLOAD="$RUNNER_TEMP/create-release.json"
-            jq -n \
-              --arg tag "$RELEASE_TAG" \
-              --arg target "$CREATE_TARGET" \
-              --arg title "$EXPECTED_TITLE" \
-              --rawfile body "$NOTES" \
-              '{tag_name:$tag,target_commitish:$target,name:$title,body:$body,draft:true,prerelease:false,make_latest:"false"}' \
-              >"$CREATE_PAYLOAD"
-            CREATED_RELEASE="$(gh api --method POST \
-              "repos/$GITHUB_REPOSITORY/releases" \
-              --input "$CREATE_PAYLOAD")"
-            CREATED_RELEASE_PATH="$RUNNER_TEMP/created-release.json"
-            printf '%s' "$CREATED_RELEASE" >"$CREATED_RELEASE_PATH"
-            CREATED_PLAN="$RUNNER_TEMP/created-plan.json"
-            python3 scripts/release_state.py validate-created-draft \
-              --release "$CREATED_RELEASE_PATH" \
-              --tag "$RELEASE_TAG" \
-              --title "$EXPECTED_TITLE" \
-              --body "$NOTES" \
-              --result "$CREATED_PLAN"
-            RELEASE_ID="$(jq -er '.release_id' "$CREATED_PLAN")"
-            OWNED_RELEASE_ID="$RELEASE_ID"
-            RELEASE_TARGET="$(approved_publisher_commit \
-              "$(jq -er '.target_commitish' "$CREATED_PLAN")")"
-            APPROVED_TAG_TARGET="$(current_tag_target)"
-            if [[ -n "$APPROVED_TAG_TARGET" ]]; then
-              APPROVED_TAG_TARGET="$(approved_publisher_commit "$APPROVED_TAG_TARGET")"
-              [[ "$RELEASE_TARGET" == "$APPROVED_TAG_TARGET" ]]
-            else
-              APPROVED_TAG_TARGET="$RELEASE_TARGET"
-            fi
-          fi
-          OWNED_TAG_TARGET="$APPROVED_TAG_TARGET"
-
-          ASSETS_JSON="$RUNNER_TEMP/draft-assets.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" \
-            >"$ASSETS_JSON"
-          ASSET_PLAN="$RUNNER_TEMP/draft-asset-plan.json"
-          python3 scripts/release_state.py plan-assets \
-            --assets "$ASSETS_JSON" \
-            --expected "$EXPECTED_ASSETS" \
-            --result "$ASSET_PLAN"
-
-          while IFS= read -r name; do
-            ASSET_ID="$(jq -r --arg name "$name" '.present[$name] // ""' "$ASSET_PLAN")"
-            if [[ -n "$ASSET_ID" ]]; then
-              gh api -H 'Accept: application/octet-stream' \
-                "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
-                >"$RUNNER_TEMP/existing-$name"
-              cmp "$INTAKE/$name" "$RUNNER_TEMP/existing-$name"
-            fi
-          done <"$EXPECTED_ASSETS"
-          OWNED_RELEASE_ID="$RELEASE_ID"
-
-          while IFS= read -r name; do
-            if jq -e --arg name "$name" '.missing | index($name) != null' "$ASSET_PLAN" >/dev/null; then
-              gh release upload "$RELEASE_TAG" "$INTAKE/$name" --repo "$GITHUB_REPOSITORY"
-            fi
-          done <"$EXPECTED_ASSETS"
-
-          FINAL_ASSETS_JSON="$RUNNER_TEMP/final-draft-assets.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" \
-            >"$FINAL_ASSETS_JSON"
-          FINAL_ASSET_PLAN="$RUNNER_TEMP/final-asset-plan.json"
-          python3 scripts/release_state.py plan-assets \
-            --assets "$FINAL_ASSETS_JSON" \
-            --expected "$EXPECTED_ASSETS" \
-            --result "$FINAL_ASSET_PLAN"
-          [[ "$(jq -er '.missing | length' "$FINAL_ASSET_PLAN")" -eq 0 ]]
-
-          DOWNLOADED="$RUNNER_TEMP/downloaded-release"
-          mkdir "$DOWNLOADED"
-          while IFS= read -r name; do
-            ASSET_ID="$(jq -er --arg name "$name" '.present[$name]' "$FINAL_ASSET_PLAN")"
-            gh api -H 'Accept: application/octet-stream' \
-              "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
-              >"$DOWNLOADED/$name"
-            cmp "$INTAKE/$name" "$DOWNLOADED/$name"
-          done <"$EXPECTED_ASSETS"
-
-          FINAL_RELEASES="$RUNNER_TEMP/final-releases.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$FINAL_RELEASES"
-          python3 scripts/verify_intake.py assert-newer \
-            --manifest "$INTAKE/notebook-release.json" \
-            --releases "$FINAL_RELEASES"
-          CURRENT_INTAKE_REF="$(git ls-remote --exit-code --heads \
-            "https://github.com/$INTAKE_REPOSITORY.git" \
-            "refs/heads/$INTAKE_BRANCH")"
-          [[ "$CURRENT_INTAKE_REF" == "$INTAKE_COMMIT"$'\t'"refs/heads/$INTAKE_BRANCH" ]]
-
-          PUBLISH_ATTEMPTED=true
-          set +e
-          gh release edit "$RELEASE_TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --draft=false \
-            --latest
-          PUBLISH_STATUS=$?
-          set -e
-          SERVER_RELEASE_PATH="$RUNNER_TEMP/server-release.json"
-          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" >"$SERVER_RELEASE_PATH"
-          if python3 scripts/release_state.py validate-published \
-            --release "$SERVER_RELEASE_PATH" \
-            --release-id "$RELEASE_ID" \
-            --tag "$RELEASE_TAG"; then
-            [[ "$(approved_publisher_commit "$(current_tag_target)")" == "$OWNED_TAG_TARGET" ]]
-          else
-            [[ "$PUBLISH_STATUS" -eq 0 ]] || exit "$PUBLISH_STATUS"
-            echo "GitHub accepted the publish command but still reports a draft." >&2
-            exit 1
-          fi
-
-          VERIFIED=false
-          for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            : "$attempt"
-            if gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              VERIFIED=true
-              break
-            fi
-            sleep 5
-          done
-          [[ "$VERIFIED" == "true" ]] || {
-            echo "GitHub did not produce a verifiable immutable-release attestation." >&2
-            exit 1
-          }
-          while IFS= read -r name; do
-            gh release verify-asset "$RELEASE_TAG" "$INTAKE/$name" \
-              --repo "$GITHUB_REPOSITORY" >/dev/null
-          done <"$EXPECTED_ASSETS"
-          trap - EXIT
+          python3 scripts/publish_release.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --intake-repository "$INTAKE_REPOSITORY" \
+            --publisher-commit "$PUBLISHER_COMMIT" \
+            --release-version "$RELEASE_VERSION" \
+            --build-number "$BUILD_NUMBER" \
+            --release-tag "$RELEASE_TAG" \
+            --archive-name "$ARCHIVE_NAME" \
+            --source-commit "$SOURCE_COMMIT" \
+            --intake-branch "$INTAKE_BRANCH" \
+            --intake-commit "$INTAKE_COMMIT" \
+            --intake "$RUNNER_TEMP/verified-intake" \
+            --work "$RUNNER_TEMP/publish-state" \
+            --distribution-mode "$NOTEBOOK_DISTRIBUTION_MODE"
 
       - name: Audit the current immutable release after publication
         if: ${{ always() && !cancelled() && steps.intake.outputs.available == 'true' }}

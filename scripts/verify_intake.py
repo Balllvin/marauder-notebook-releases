@@ -307,10 +307,20 @@ def validate_intake(
     source = metadata["source"]
     if not isinstance(source, dict):
         raise IntakeError("release source must be one object")
-    _require_exact_keys(source, {"repository", "commit"}, "release source")
+    _require_exact_keys(
+        source,
+        {"repository", "commit", "previous_commit"},
+        "release source",
+    )
     source_commit = source["commit"]
     if source["repository"] != SOURCE_REPOSITORY or not isinstance(source_commit, str) or SOURCE_COMMIT.fullmatch(source_commit) is None:
         raise IntakeError("release source does not identify an exact Marauder commit")
+    previous_source_commit = source["previous_commit"]
+    if previous_source_commit is not None and (
+        not isinstance(previous_source_commit, str)
+        or SOURCE_COMMIT.fullmatch(previous_source_commit) is None
+    ):
+        raise IntakeError("release source has an invalid previous published commit")
     expected_branch = f"publication/{version}-{build_number}-{source_commit}"
     if branch != expected_branch:
         raise IntakeError("publication branch does not match the signed release identity")
@@ -370,6 +380,7 @@ def validate_intake(
         "tag": tag,
         "archive": archive_name,
         "source_commit": source_commit,
+        "previous_source_commit": previous_source_commit,
         "branch": expected_branch,
     }
 
@@ -414,6 +425,84 @@ def assert_newer(manifest_path: Path, releases_path: Path) -> None:
             raise IntakeError("build number must be strictly greater than every published build")
 
 
+def _verified_source_identity(
+    manifest_path: Path,
+    *,
+    public_key: str,
+    openssl: str,
+) -> tuple[str, str | None]:
+    metadata = _read_json(manifest_path, 32 * 1024)
+    _require_exact_keys(
+        metadata,
+        {
+            "schema",
+            "product",
+            "version",
+            "build_number",
+            "tag",
+            "architecture",
+            "source",
+            "asset",
+            "checksum",
+            "appcast",
+            "provenance",
+        },
+        "notebook-release.json",
+    )
+    if metadata["schema"] != 1 or metadata["product"] != PRODUCT_NAME:
+        raise IntakeError("release metadata has the wrong schema or product")
+    _verify_provenance(metadata, _canonical_public_key(public_key), openssl)
+    source = metadata["source"]
+    if not isinstance(source, dict):
+        raise IntakeError("release source must be one object")
+    _require_exact_keys(
+        source,
+        {"repository", "commit", "previous_commit"},
+        "release source",
+    )
+    commit = source["commit"]
+    previous_commit = source["previous_commit"]
+    if (
+        source["repository"] != SOURCE_REPOSITORY
+        or not isinstance(commit, str)
+        or SOURCE_COMMIT.fullmatch(commit) is None
+    ):
+        raise IntakeError("release source does not identify an exact Marauder commit")
+    if previous_commit is not None and (
+        not isinstance(previous_commit, str)
+        or SOURCE_COMMIT.fullmatch(previous_commit) is None
+    ):
+        raise IntakeError("release source has an invalid previous published commit")
+    return commit, previous_commit
+
+
+def assert_source_link(
+    manifest_path: Path,
+    previous_manifest_path: Path | None,
+    *,
+    public_key: str = PUBLIC_ED_KEY,
+    openssl: str = "openssl",
+) -> None:
+    _candidate_commit, candidate_previous_commit = _verified_source_identity(
+        manifest_path,
+        public_key=public_key,
+        openssl=openssl,
+    )
+    if previous_manifest_path is None:
+        if candidate_previous_commit is not None:
+            raise IntakeError("the first release must not claim a previous published source")
+        return
+    previous_commit, _previous_previous_commit = _verified_source_identity(
+        previous_manifest_path,
+        public_key=public_key,
+        openssl=openssl,
+    )
+    if candidate_previous_commit != previous_commit:
+        raise IntakeError(
+            "release source does not continue from the latest signed published source"
+        )
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Verify a signed Marauder Notebook release intake")
     subparsers = result.add_subparsers(dest="command", required=True)
@@ -425,6 +514,10 @@ def parser() -> argparse.ArgumentParser:
     newer = subparsers.add_parser("assert-newer")
     newer.add_argument("--manifest", required=True, type=Path)
     newer.add_argument("--releases", required=True, type=Path)
+    source_link = subparsers.add_parser("assert-source-link")
+    source_link.add_argument("--manifest", required=True, type=Path)
+    source_link.add_argument("--previous-manifest", type=Path)
+    source_link.add_argument("--openssl", default="openssl")
     return result
 
 
@@ -438,8 +531,14 @@ def main() -> int:
                 openssl=arguments.openssl,
             )
             arguments.result.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
-        else:
+        elif arguments.command == "assert-newer":
             assert_newer(arguments.manifest, arguments.releases)
+        else:
+            assert_source_link(
+                arguments.manifest,
+                arguments.previous_manifest,
+                openssl=arguments.openssl,
+            )
     except (IntakeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

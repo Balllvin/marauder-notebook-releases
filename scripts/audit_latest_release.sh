@@ -90,6 +90,36 @@ python3 scripts/verify_intake.py validate \
 
 EXPECTED_ASSETS="$WORK_ROOT/expected-assets"
 ARCHIVE_NAME="$(jq -er '.archive' "$WORK_ROOT/verified-release.json")"
+
+EXPANDED="$WORK_ROOT/expanded-release"
+mkdir "$EXPANDED"
+python3 scripts/verify_release_archive.py --archive "$AUDIT/$ARCHIVE_NAME"
+/usr/bin/ditto -x -k "$AUDIT/$ARCHIVE_NAME" "$EXPANDED"
+APP="$EXPANDED/Marauder Notebook.app"
+[[ -d "$APP" && ! -L "$APP" ]]
+EXTRA_ENTRY="$(/usr/bin/find "$EXPANDED" -mindepth 1 -maxdepth 1 ! -name 'Marauder Notebook.app' -print -quit)"
+[[ -z "$EXTRA_ENTRY" ]]
+VERIFY_ARGUMENTS=(
+  --app "$APP"
+  --release-version "$RELEASE_VERSION"
+  --build-number "$BUILD_NUMBER"
+  --distribution-mode "${NOTEBOOK_DISTRIBUTION_MODE:-independent}"
+)
+if [[ "${NOTEBOOK_DISTRIBUTION_MODE:-independent}" == "developer-id" ]]; then
+  [[ "${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}" =~ ^[A-Z0-9]{10}$ ]]
+  VERIFY_ARGUMENTS+=(
+    --expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"
+  )
+else
+  [[ "${NOTEBOOK_DISTRIBUTION_MODE:-independent}" == "independent" ]]
+  [[ -z "${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}" ]]
+fi
+python3 scripts/verify_app_bundle.py "${VERIFY_ARGUMENTS[@]}"
+if [[ "${NOTEBOOK_DISTRIBUTION_MODE:-independent}" == "developer-id" ]]; then
+  /usr/bin/xcrun stapler validate "$APP"
+  /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+fi
+
 printf '%s\n' \
   "$ARCHIVE_NAME" \
   "$ARCHIVE_NAME.sha256" \

@@ -85,7 +85,11 @@ class VerifyIntakeTests(unittest.TestCase):
             "build_number": build_number,
             "tag": tag,
             "architecture": "universal",
-            "source": {"repository": verify_intake.SOURCE_REPOSITORY, "commit": source_commit},
+            "source": {
+                "repository": verify_intake.SOURCE_REPOSITORY,
+                "commit": source_commit,
+                "previous_commit": None,
+            },
             "asset": {
                 "name": archive_name,
                 "url": archive_url,
@@ -234,6 +238,47 @@ class VerifyIntakeTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(verify_intake.IntakeError, "strictly greater"):
             verify_intake.assert_newer(intake / "notebook-release.json", releases)
+
+    def test_signed_source_link_must_continue_from_latest_published_manifest(self) -> None:
+        intake, _branch = self.make_intake()
+        candidate = intake / "notebook-release.json"
+        verify_intake.assert_source_link(
+            candidate,
+            None,
+            public_key=self.public_key,
+            openssl=self.openssl,
+        )
+
+        previous = self.root / "previous-notebook-release.json"
+        previous.write_bytes(candidate.read_bytes())
+        candidate_metadata = json.loads(candidate.read_text(encoding="utf-8"))
+        candidate_metadata["source"]["commit"] = "b" * 40
+        candidate_metadata["source"]["previous_commit"] = "a" * 40
+        self.write_signed_metadata(candidate, candidate_metadata)
+        verify_intake.assert_source_link(
+            candidate,
+            previous,
+            public_key=self.public_key,
+            openssl=self.openssl,
+        )
+
+        candidate_metadata["source"]["previous_commit"] = "c" * 40
+        self.write_signed_metadata(candidate, candidate_metadata)
+        with self.assertRaisesRegex(verify_intake.IntakeError, "latest signed"):
+            verify_intake.assert_source_link(
+                candidate,
+                previous,
+                public_key=self.public_key,
+                openssl=self.openssl,
+            )
+
+        with self.assertRaisesRegex(verify_intake.IntakeError, "first release"):
+            verify_intake.assert_source_link(
+                candidate,
+                None,
+                public_key=self.public_key,
+                openssl=self.openssl,
+            )
 
 
 if __name__ == "__main__":

@@ -227,6 +227,107 @@ class PrepareIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(prepare_intake.PreparationError, "prereleases"):
             prepare_intake.select_pending_intake(refs, releases)
 
+    def test_invalid_lower_candidate_does_not_starve_later_verified_candidate(self) -> None:
+        selection = self.root / "selection.json"
+        lower_branch = f"publication/1.2.3-42-{'a' * 40}"
+        later_branch = f"publication/1.3.0-43-{'c' * 40}"
+        selection.write_text(
+            json.dumps(
+                {
+                    "available": True,
+                    "candidates": [
+                        {"branch": lower_branch, "commit": "b" * 40},
+                        {"branch": later_branch, "commit": "d" * 40},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def fake_prepare(
+            _repository: Path,
+            commit: str,
+            branch: str,
+            output: Path,
+            **_arguments: object,
+        ) -> dict[str, object]:
+            if branch == lower_branch:
+                raise prepare_intake.PreparationError("invalid signed metadata")
+            output.mkdir()
+            (output / "verified").write_text(commit, encoding="utf-8")
+            return {"branch": branch, "intake_commit": commit}
+
+        output = self.root / "verified-intake"
+        with mock.patch.object(prepare_intake, "prepare_intake", side_effect=fake_prepare):
+            result = prepare_intake.prepare_pending_intake(
+                self.root,
+                selection,
+                output,
+                openssl="openssl",
+            )
+        self.assertEqual(result["branch"], later_branch)
+        self.assertEqual(result["invalid_candidate_count"], 1)
+        self.assertEqual(result["invalid_candidates"][0]["branch"], lower_branch)
+        self.assertEqual((output / "verified").read_text(encoding="utf-8"), "d" * 40)
+
+    def test_all_invalid_pending_candidates_fail_loudly(self) -> None:
+        selection = self.root / "selection.json"
+        selection.write_text(
+            json.dumps(
+                {
+                    "available": True,
+                    "candidates": [
+                        {
+                            "branch": f"publication/1.2.3-42-{'a' * 40}",
+                            "commit": "b" * 40,
+                        },
+                        {
+                            "branch": f"publication/1.3.0-43-{'c' * 40}",
+                            "commit": "d" * 40,
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(
+            prepare_intake,
+            "prepare_intake",
+            side_effect=prepare_intake.PreparationError("rejected"),
+        ):
+            with self.assertRaisesRegex(
+                prepare_intake.PreparationError,
+                "all 2 pending intake candidates failed verification",
+            ):
+                prepare_intake.prepare_pending_intake(
+                    self.root,
+                    selection,
+                    self.root / "verified-intake",
+                    openssl="openssl",
+                )
+
+    def test_no_pending_candidates_remains_an_idle_success(self) -> None:
+        selection = self.root / "selection.json"
+        selection.write_text(
+            json.dumps({"available": False, "candidates": []}),
+            encoding="utf-8",
+        )
+        result = prepare_intake.prepare_pending_intake(
+            self.root,
+            selection,
+            self.root / "verified-intake",
+            openssl="openssl",
+        )
+        self.assertEqual(
+            result,
+            {
+                "available": False,
+                "invalid_candidate_count": 0,
+                "invalid_candidates": [],
+            },
+        )
+        self.assertFalse((self.root / "verified-intake").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
