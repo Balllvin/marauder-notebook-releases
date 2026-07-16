@@ -7,7 +7,7 @@ from scripts import release_state
 
 TAG = "notebook-v1.2.3-42"
 TITLE = "Marauder Notebook 1.2.3 (42)"
-BODY = "Signed and notarized universal macOS application.\n"
+BODY = "Independently signed universal macOS application.\n"
 TARGET = "a" * 40
 EXPECTED_ASSETS = [
     "Marauder-Notebook-1.2.3-42-universal.zip",

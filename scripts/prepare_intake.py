@@ -6,8 +6,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -137,13 +139,23 @@ def _select_pending_intake(refs: list[object], releases: list[object]) -> dict[s
         else:
             ignored_ref_count += len(identity_candidates)
 
-    if not candidates:
-        return {"available": False, "ignored_ref_count": ignored_ref_count}
-    _, _, branch, commit = min(candidates)
+    candidates.sort()
+    prepared_candidates = [
+        {"branch": branch, "commit": commit}
+        for _version, _build, branch, commit in candidates
+    ]
+    if not prepared_candidates:
+        return {
+            "available": False,
+            "candidates": [],
+            "ignored_ref_count": ignored_ref_count,
+        }
+    first = prepared_candidates[0]
     return {
         "available": True,
-        "branch": branch,
-        "commit": commit,
+        "branch": first["branch"],
+        "commit": first["commit"],
+        "candidates": prepared_candidates,
         "ignored_ref_count": ignored_ref_count,
     }
 
@@ -320,7 +332,7 @@ def prepare_intake(
         raise PreparationError("intake paths must be ordinary non-executable blobs")
 
     limits = {
-        archive_name: 2 * 1024 * 1024 * 1024,
+        archive_name: 512 * 1024 * 1024,
         f"{archive_name}.sha256": 1024,
         "appcast.xml": 1024 * 1024,
         "update-feed.json": 32 * 1024,
@@ -330,6 +342,68 @@ def prepare_intake(
     result = verify_intake.validate_intake(output, branch, openssl=openssl)
     result["intake_commit"] = commit
     return result
+
+
+def prepare_pending_intake(
+    repository: Path,
+    selection_path: Path,
+    output: Path,
+    *,
+    openssl: str,
+    trusted_main_ref: str = "origin/main",
+) -> dict[str, object]:
+    selection = _read_json(selection_path)
+    if not isinstance(selection, dict) or not isinstance(selection.get("available"), bool):
+        raise PreparationError("intake selection has no boolean availability")
+    candidates = selection.get("candidates")
+    if not isinstance(candidates, list):
+        raise PreparationError("intake selection has no candidate list")
+    if selection["available"] is False:
+        if candidates:
+            raise PreparationError("unavailable intake selection cannot contain candidates")
+        return {
+            "available": False,
+            "invalid_candidate_count": 0,
+            "invalid_candidates": [],
+        }
+    if not candidates:
+        raise PreparationError("available intake selection has no candidates")
+    if output.exists() or output.is_symlink():
+        raise PreparationError("verified intake output must not already exist")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    invalid: list[dict[str, str]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise PreparationError("intake candidate is not an object")
+        branch = candidate.get("branch")
+        commit = candidate.get("commit")
+        if not isinstance(branch, str) or not isinstance(commit, str):
+            raise PreparationError("intake candidate has an invalid identity")
+        with tempfile.TemporaryDirectory(
+            prefix="notebook-intake-candidate-", dir=output.parent
+        ) as temporary:
+            candidate_output = Path(temporary) / "verified"
+            try:
+                result: dict[str, object] = prepare_intake(
+                    repository,
+                    commit,
+                    branch,
+                    candidate_output,
+                    openssl=openssl,
+                    trusted_main_ref=trusted_main_ref,
+                )
+            except (PreparationError, verify_intake.IntakeError) as error:
+                invalid.append({"branch": branch, "reason": str(error)[:512]})
+                continue
+            shutil.move(str(candidate_output), output)
+            result["available"] = True
+            result["invalid_candidate_count"] = len(invalid)
+            result["invalid_candidates"] = invalid
+            return result
+    raise PreparationError(
+        f"all {len(invalid)} pending intake candidates failed verification"
+    )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -349,6 +423,13 @@ def parser() -> argparse.ArgumentParser:
     prepare.add_argument("--openssl", default="openssl")
     prepare.add_argument("--trusted-main-ref", default="origin/main")
     prepare.add_argument("--result", required=True, type=Path)
+    pending = subparsers.add_parser("prepare-pending")
+    pending.add_argument("--repository", required=True, type=Path)
+    pending.add_argument("--selection", required=True, type=Path)
+    pending.add_argument("--output", required=True, type=Path)
+    pending.add_argument("--openssl", default="openssl")
+    pending.add_argument("--trusted-main-ref", default="origin/main")
+    pending.add_argument("--result", required=True, type=Path)
     return result
 
 
@@ -363,11 +444,19 @@ def main() -> int:
                 )
             else:
                 result = select_pending_intake(arguments.refs, arguments.releases)
-        else:
+        elif arguments.command == "prepare":
             result = prepare_intake(
                 arguments.repository,
                 arguments.commit,
                 arguments.branch,
+                arguments.output,
+                openssl=arguments.openssl,
+                trusted_main_ref=arguments.trusted_main_ref,
+            )
+        else:
+            result = prepare_pending_intake(
+                arguments.repository,
+                arguments.selection,
                 arguments.output,
                 openssl=arguments.openssl,
                 trusted_main_ref=arguments.trusted_main_ref,
