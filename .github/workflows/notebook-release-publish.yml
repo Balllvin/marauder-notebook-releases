@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/audit_latest_release.sh
 
-      - name: Select the locked or oldest legacy unpublished intake
+      - name: Select the locked unpublished intake
         id: intake
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
