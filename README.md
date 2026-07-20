@@ -39,7 +39,7 @@ Unsigned, plain ad-hoc, mixed-certificate, Developer ID, wrong-team, wrong-requi
 
 The verifier retains a dormant Developer ID mode for a future, deliberately reviewed policy change. It requires one exact team identifier, Hardened Runtime throughout, a valid notarization ticket, and Gatekeeper acceptance. That path is not enabled or claimed by the current independent policy.
 
-The independent root and release private keys never enter this repository. The offline root is a long-lived release identity and must be backed up securely; CI receives only a rotating leaf key. Release certificates may rotate under that root without changing the root-pinned application identity. Replacing the root is an explicit distribution-identity migration.
+The independent root and release private keys never enter this repository. The offline root is a long-lived release identity and must be backed up securely; an authorized local producer receives only a rotating leaf key. Release certificates may rotate under that root without changing the root-pinned application identity. Replacing the root is an explicit distribution-identity migration.
 
 Independent certificates have no Apple Team Identifier, so Sparkle cannot apply its optional Apple-team policy to XPC client connections and explicitly treats that policy as non-security-critical. The account-free path does not claim that Apple-team check. Update authenticity instead fails closed on the Ed25519-signed feed and archive, and every shipped updater executable is sealed under the pinned Marauder root identity. Enabling the Apple-team policy would require an Apple-issued signing identity.
 
@@ -49,13 +49,21 @@ Every candidate after the first carries the previous published source commit ins
 
 ## Publisher branch protection
 
-The `main` branch must require the base-anchored `Verify publisher boundary` commit status from `.github/workflows/publisher-ci.yml`. `pull_request_target` keeps the workflow definition on protected `main`; a separate protected-main checkout supplies the checksum-pinned actionlint installer, while the proposed commit is checked out independently and validated with a read-only token and no secrets. A separate no-checkout job receives only `statuses: write` and reports pass or failure on the exact validated pull-request commit, so the required context cannot be satisfied by the base-branch run itself. Push runs report the same context on the protected commit, making the tracked policy bootstrappable immediately after this workflow first lands. The tracked bootstrap prints the complete intended protection policy without changing GitHub by default:
+The `main` branch requires the `Verify publisher boundary` commit status. From a clean protected-`main` checkout, run its trusted verifier against the exact clean candidate checkout and record the successful result explicitly:
+
+```bash
+scripts/verify_publisher_boundary.sh \
+  --root /path/to/candidate-checkout \
+  --record-status
+```
+
+Without `--record-status`, the command performs the same compile, shell, OpenSSL, actionlint, and complete test-suite verification without changing GitHub. The optional `.github/workflows/publisher-ci.yml` checks out the verifier from protected `main`, passes the proposed checkout through `--root`, and uses a read-only token; a separate no-checkout job reports its result. The proposed change can never replace the verifier that grants its own status. Hosted runners are therefore convenient but not required to satisfy the protected status. The tracked bootstrap prints the complete intended protection policy without changing GitHub by default:
 
 ```bash
 scripts/configure_branch_protection.sh
 ```
 
-After the publisher CI workflow has run at least once and the policy has been reviewed, a repository administrator can apply it explicitly with `GH_TOKEN` set:
+After a local result has been recorded and the policy has been reviewed, a repository administrator can apply it explicitly with `GH_TOKEN` set:
 
 ```bash
 scripts/configure_branch_protection.sh --apply

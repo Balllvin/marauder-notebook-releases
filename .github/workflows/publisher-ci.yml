@@ -36,26 +36,8 @@ jobs:
           path: candidate
           persist-credentials: false
 
-      - name: Install pinned actionlint
-        run: publisher-policy/scripts/install_actionlint.sh "$RUNNER_TEMP/actionlint-bin"
-
-      - name: Validate publisher workflows
-        run: |
-          "$RUNNER_TEMP/actionlint-bin/actionlint" \
-            candidate/.github/workflows/notebook-release-publish.yml \
-            candidate/.github/workflows/publisher-ci.yml
-
-      - name: Validate executable sources
-        working-directory: candidate
-        run: |
-          set -euo pipefail
-          python3 -m compileall -q scripts tests
-          bash -n scripts/*.sh
-          scripts/verify_openssl.sh >/dev/null
-
-      - name: Run publisher security and workflow contracts
-        working-directory: candidate
-        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Run the local publisher boundary verifier
+        run: publisher-policy/scripts/verify_publisher_boundary.sh --root candidate
 
   report:
     name: Report publisher validation

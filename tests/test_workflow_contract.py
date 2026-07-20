@@ -235,6 +235,7 @@ class WorkflowContractTests(unittest.TestCase):
             "install_actionlint.sh",
             "publish_release.py",
             "publish_local.sh",
+            "verify_publisher_boundary.sh",
             "verify_openssl.sh",
         ):
             mode = (REPOSITORY_ROOT / "scripts" / name).stat().st_mode
@@ -248,19 +249,16 @@ class WorkflowContractTests(unittest.TestCase):
             REPOSITORY_ROOT / "scripts" / "configure_branch_protection.sh"
         ).read_text(encoding="utf-8")
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        local_verifier = (
+            REPOSITORY_ROOT / "scripts" / "verify_publisher_boundary.sh"
+        ).read_text(encoding="utf-8")
         for contract in (
             "pull_request_target:",
             "push:",
             "Verify publisher boundary",
             "Run publisher boundary validation",
             "Report publisher validation",
-            "python3 -m unittest discover",
-            "publisher-policy/scripts/install_actionlint.sh",
-            "Check out protected publisher policy",
-            "ref: refs/heads/main",
-            "working-directory: candidate",
-            '"$RUNNER_TEMP/actionlint-bin/actionlint"',
-            "notebook-release-publish.yml",
+            "scripts/verify_publisher_boundary.sh",
             "github.event.pull_request.head.sha || github.sha",
             "github.event.pull_request.head.repo.full_name || github.repository",
             "statuses: write",
@@ -269,8 +267,29 @@ class WorkflowContractTests(unittest.TestCase):
             "github.event.pull_request.head.sha || github.sha",
         ):
             self.assertIn(contract, ci)
+        self.assertIn("Check out protected publisher policy", ci)
+        self.assertIn("ref: refs/heads/main", ci)
+        self.assertIn(
+            "publisher-policy/scripts/verify_publisher_boundary.sh --root candidate",
+            ci,
+        )
+        self.assertNotIn("run: scripts/verify_publisher_boundary.sh", ci)
         self.assertNotIn("name: Verify publisher boundary", ci)
         self.assertLess(ci.index("needs: verify"), ci.index("statuses: write"))
+        for contract in (
+            '"$SCRIPT_DIR/install_actionlint.sh"',
+            "notebook-release-publish.yml",
+            "publisher-ci.yml",
+            "python3 -m compileall -q scripts tests",
+            "bash -n scripts/*.sh",
+            "scripts/verify_openssl.sh",
+            "python3 -m unittest discover",
+            "--record-status",
+            "--root",
+            'context="$REQUIRED_CHECK"',
+            '[[ -z "$(git status --porcelain)" ]]',
+        ):
+            self.assertIn(contract, local_verifier)
         for contract in (
             'REPOSITORY="Balllvin/marauder-notebook-releases"',
             'REQUIRED_CHECK="Verify publisher boundary"',
@@ -284,7 +303,7 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, bootstrap)
         self.assertIn('"required_approving_review_count": 0', bootstrap)
-        self.assertIn("pull_request_target", readme)
+        self.assertIn("--root /path/to/candidate-checkout", readme)
         self.assertIn("scripts/configure_branch_protection.sh --apply", readme)
 
     def test_publish_workflow_delegates_the_release_state_machine(self) -> None:
