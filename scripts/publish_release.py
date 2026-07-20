@@ -53,7 +53,7 @@ class PublishConfig:
     source_commit: str
     intake_branch: str
     intake_commit: str
-    publication_lock_commit: str | None
+    publication_lock_commit: str
     intake: Path
     work: Path
     distribution_mode: str
@@ -62,7 +62,9 @@ class PublishConfig:
 class Gateway(Protocol):
     def head(self) -> str: ...
     def is_ancestor(self, ancestor: str, descendant: str) -> bool: ...
-    def intake_target(self, repository: str, branch: str) -> str | None: ...
+    def intake_snapshot(
+        self, repository: str, branches: tuple[str, ...]
+    ) -> dict[str, str | None]: ...
     def current_tag_target(self, repository: str, tag: str) -> str | None: ...
     def list_releases(self, repository: str) -> list[object]: ...
     def create_draft(self, repository: str, payload: dict[str, object]) -> object: ...
@@ -92,13 +94,13 @@ class ReleasePublisher:
         return commit
 
     def _assert_intake_unchanged(self) -> None:
-        if self.gateway.intake_target(
-            self.config.intake_repository, self.config.intake_branch
-        ) != self.config.intake_commit:
+        snapshot = self.gateway.intake_snapshot(
+            self.config.intake_repository,
+            (self.config.intake_branch, PUBLICATION_LOCK_BRANCH),
+        )
+        if snapshot[self.config.intake_branch] != self.config.intake_commit:
             raise PublishError("intake ref changed during publication")
-        if self.gateway.intake_target(
-            self.config.intake_repository, PUBLICATION_LOCK_BRANCH
-        ) != self.config.publication_lock_commit:
+        if snapshot[PUBLICATION_LOCK_BRANCH] != self.config.publication_lock_commit:
             raise PublishError("publication lock changed during publication")
 
     def _cleanup_owned_draft(self) -> None:
@@ -269,10 +271,8 @@ def _config(arguments: argparse.Namespace) -> PublishConfig:
         raise PublishError("publisher, source, and intake commits must be exact lowercase SHAs")
     if arguments.repository != REPOSITORY or arguments.intake_repository != INTAKE_REPOSITORY:
         raise PublishError("publisher repositories do not match the protected contract")
-    publication_lock_commit = (
-        None if arguments.publication_lock_commit == "none" else arguments.publication_lock_commit
-    )
-    if publication_lock_commit is not None and (
+    publication_lock_commit = arguments.publication_lock_commit
+    if (
         COMMIT.fullmatch(publication_lock_commit) is None
         or publication_lock_commit != arguments.intake_commit
     ):

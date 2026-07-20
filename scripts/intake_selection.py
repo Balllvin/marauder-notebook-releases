@@ -33,10 +33,6 @@ class IntakeCandidate:
     commit: str
     tag: str
 
-    @property
-    def identity(self) -> tuple[tuple[int, int, int], int]:
-        return self.version, self.build
-
     def result(self) -> dict[str, str]:
         return {"branch": self.branch, "commit": self.commit}
 
@@ -145,33 +141,6 @@ def _locked_candidates(
     return [locked], max(eligible_count - 1, 0), False
 
 
-def _legacy_candidates(
-    candidates: list[IntakeCandidate],
-    published_tags: set[str],
-    highest_version: tuple[int, int, int],
-    highest_build: int,
-) -> tuple[list[IntakeCandidate], int]:
-    by_identity: dict[
-        tuple[tuple[int, int, int], int], list[IntakeCandidate]
-    ] = {}
-    ignored = 0
-    for candidate in candidates:
-        if candidate.tag in published_tags:
-            continue
-        if candidate.version <= highest_version or candidate.build <= highest_build:
-            ignored += 1
-            continue
-        by_identity.setdefault(candidate.identity, []).append(candidate)
-
-    selected: list[IntakeCandidate] = []
-    for identity_candidates in by_identity.values():
-        if len(identity_candidates) == 1:
-            selected.extend(identity_candidates)
-        else:
-            ignored += len(identity_candidates)
-    return selected, ignored
-
-
 def select_pending_intake(refs: list[object], releases: list[object]) -> dict[str, object]:
     lock_commit, publication_refs = _publication_lock(refs)
     published_tags, highest_version, highest_build = _publication_history(releases)
@@ -190,14 +159,17 @@ def select_pending_intake(refs: list[object], releases: list[object]) -> dict[st
         candidates.append(candidate)
 
     if lock_commit is None:
-        selected, selection_ignored = _legacy_candidates(
-            candidates, published_tags, highest_version, highest_build
-        )
-        already_published = False
-    else:
-        selected, selection_ignored, already_published = _locked_candidates(
-            candidates, lock_commit, published_tags, highest_version, highest_build
-        )
+        if candidates:
+            raise SelectionError("publication intake exists without the required lock")
+        return {
+            "available": False,
+            "candidates": [],
+            "ignored_ref_count": ignored,
+            "publication_lock_commit": "none",
+        }
+    selected, selection_ignored, already_published = _locked_candidates(
+        candidates, lock_commit, published_tags, highest_version, highest_build
+    )
     ignored += selection_ignored
 
     selected.sort()

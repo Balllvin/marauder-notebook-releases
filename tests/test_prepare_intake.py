@@ -126,7 +126,7 @@ class PrepareIntakeTests(unittest.TestCase):
                 openssl="openssl",
             )
 
-    def test_selects_oldest_unpublished_valid_intake(self) -> None:
+    def test_rejects_unlocked_publication_intake(self) -> None:
         refs = self.root / "refs.json"
         releases = self.root / "releases.json"
         refs.write_text(
@@ -148,10 +148,8 @@ class PrepareIntakeTests(unittest.TestCase):
             json.dumps([[{"tag_name": "notebook-v1.2.0-40", "draft": False}]]),
             encoding="utf-8",
         )
-        result = prepare_intake.select_pending_intake(refs, releases)
-        self.assertEqual(result["branch"], f"publication/1.3.0-50-{'c' * 40}")
-        self.assertEqual(result["commit"], "d" * 40)
-        self.assertEqual(result["publication_lock_commit"], "none")
+        with self.assertRaisesRegex(prepare_intake.PreparationError, "required lock"):
+            prepare_intake.select_pending_intake(refs, releases)
 
     def test_publication_lock_selects_only_its_matching_candidate(self) -> None:
         refs = self.root / "refs.json"
@@ -318,6 +316,10 @@ class PrepareIntakeTests(unittest.TestCase):
                         "ref": f"refs/heads/publication/1.3.0-43-{'e' * 40}",
                         "object": {"type": "commit", "sha": "f" * 40},
                     },
+                    {
+                        "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                        "object": {"type": "commit", "sha": "f" * 40},
+                    },
                 ]]
             ),
             encoding="utf-8",
@@ -346,6 +348,10 @@ class PrepareIntakeTests(unittest.TestCase):
                         "ref": f"refs/heads/publication/2.1.0-202-{'d' * 40}",
                         "object": {"type": "commit", "sha": "e" * 40},
                     },
+                    {
+                        "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                        "object": {"type": "commit", "sha": "e" * 40},
+                    },
                 ]]
             ),
             encoding="utf-8",
@@ -356,7 +362,7 @@ class PrepareIntakeTests(unittest.TestCase):
         )
         result = prepare_intake.select_pending_intake(refs, releases)
         self.assertEqual(result["branch"], f"publication/2.1.0-202-{'d' * 40}")
-        self.assertEqual(result["ignored_ref_count"], 3)
+        self.assertEqual(result["ignored_ref_count"], 2)
 
     def test_rejects_non_notebook_or_prerelease_publication_history(self) -> None:
         refs = self.root / "refs.json"
@@ -375,17 +381,15 @@ class PrepareIntakeTests(unittest.TestCase):
         with self.assertRaisesRegex(prepare_intake.PreparationError, "prereleases"):
             prepare_intake.select_pending_intake(refs, releases)
 
-    def test_invalid_lower_candidate_does_not_starve_later_verified_candidate(self) -> None:
+    def test_prepares_only_the_locked_candidate(self) -> None:
         selection = self.root / "selection.json"
-        lower_branch = f"publication/1.2.3-42-{'a' * 40}"
         later_branch = f"publication/1.3.0-43-{'c' * 40}"
         selection.write_text(
             json.dumps(
                 {
                     "available": True,
-                    "publication_lock_commit": "none",
+                    "publication_lock_commit": "d" * 40,
                     "candidates": [
-                        {"branch": lower_branch, "commit": "b" * 40},
                         {"branch": later_branch, "commit": "d" * 40},
                     ],
                 }
@@ -400,8 +404,6 @@ class PrepareIntakeTests(unittest.TestCase):
             output: Path,
             **_arguments: object,
         ) -> dict[str, object]:
-            if branch == lower_branch:
-                raise prepare_intake.PreparationError("invalid signed metadata")
             output.mkdir()
             (output / "verified").write_text(commit, encoding="utf-8")
             return {"branch": branch, "intake_commit": commit}
@@ -415,8 +417,8 @@ class PrepareIntakeTests(unittest.TestCase):
                 openssl="openssl",
             )
         self.assertEqual(result["branch"], later_branch)
-        self.assertEqual(result["invalid_candidate_count"], 1)
-        self.assertEqual(result["invalid_candidates"][0]["branch"], lower_branch)
+        self.assertEqual(result["invalid_candidate_count"], 0)
+        self.assertEqual(result["invalid_candidates"], [])
         self.assertEqual((output / "verified").read_text(encoding="utf-8"), "d" * 40)
 
     def test_all_invalid_pending_candidates_fail_loudly(self) -> None:
@@ -425,15 +427,11 @@ class PrepareIntakeTests(unittest.TestCase):
             json.dumps(
                 {
                     "available": True,
-                    "publication_lock_commit": "none",
+                    "publication_lock_commit": "b" * 40,
                     "candidates": [
                         {
                             "branch": f"publication/1.2.3-42-{'a' * 40}",
                             "commit": "b" * 40,
-                        },
-                        {
-                            "branch": f"publication/1.3.0-43-{'c' * 40}",
-                            "commit": "d" * 40,
                         },
                     ],
                 }
@@ -447,7 +445,7 @@ class PrepareIntakeTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(
                 prepare_intake.PreparationError,
-                "all 2 pending intake candidates failed verification",
+                "all 1 pending intake candidates failed verification",
             ):
                 prepare_intake.prepare_pending_intake(
                     self.root,

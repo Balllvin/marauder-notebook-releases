@@ -4,7 +4,6 @@ import json
 import tempfile
 import unittest
 from argparse import Namespace
-from dataclasses import replace
 from pathlib import Path
 
 from scripts.publish_release import (
@@ -74,7 +73,7 @@ class FakeGateway:
             BRANCH: INTAKE_COMMIT,
             PUBLICATION_LOCK_BRANCH: INTAKE_COMMIT,
         }
-        self.lock_target_sequence: list[str | None] = []
+        self.intake_snapshot_sequence: list[dict[str, str | None]] = []
 
     def head(self) -> str:
         return PUBLISHER_COMMIT
@@ -82,10 +81,12 @@ class FakeGateway:
     def is_ancestor(self, ancestor: str, descendant: str) -> bool:
         return ancestor == PUBLISHER_COMMIT and descendant == PUBLISHER_COMMIT
 
-    def intake_target(self, repository: str, branch: str) -> str | None:
-        if branch == PUBLICATION_LOCK_BRANCH and self.lock_target_sequence:
-            return self.lock_target_sequence.pop(0)
-        return self.intake_targets.get(branch)
+    def intake_snapshot(
+        self, repository: str, branches: tuple[str, ...]
+    ) -> dict[str, str | None]:
+        if self.intake_snapshot_sequence:
+            return self.intake_snapshot_sequence.pop(0)
+        return {branch: self.intake_targets.get(branch) for branch in branches}
 
     def current_tag_target(self, repository: str, tag: str) -> str | None:
         return self.tag_target
@@ -205,8 +206,9 @@ class PublishReleaseTests(unittest.TestCase):
         self.assertEqual(gateway.deleted, [])
         self.assertIsNone(publisher.owned_release_id)
 
-    def test_config_accepts_legacy_none_and_rejects_a_different_lock_commit(self) -> None:
-        self.assertIsNone(_config(self.config_arguments("none")).publication_lock_commit)
+    def test_config_requires_the_lock_to_identify_the_intake(self) -> None:
+        with self.assertRaisesRegex(PublishError, "does not identify"):
+            _config(self.config_arguments("none"))
         with self.assertRaisesRegex(PublishError, "does not identify"):
             _config(self.config_arguments("d" * 40))
 
@@ -219,23 +221,23 @@ class PublishReleaseTests(unittest.TestCase):
 
     def test_lock_change_before_publish_removes_the_owned_draft(self) -> None:
         gateway = FakeGateway()
-        gateway.lock_target_sequence = [INTAKE_COMMIT, "d" * 40]
+        gateway.intake_snapshot_sequence = [
+            {BRANCH: INTAKE_COMMIT, PUBLICATION_LOCK_BRANCH: INTAKE_COMMIT},
+            {BRANCH: INTAKE_COMMIT, PUBLICATION_LOCK_BRANCH: "d" * 40},
+        ]
         publisher = self.publisher(gateway)
         with self.assertRaisesRegex(PublishError, "publication lock changed"):
             publisher.run()
         self.assertEqual(gateway.deleted, ["17"])
         self.assertEqual(publisher.state, PublishState.ASSETS_VERIFIED)
 
-    def test_legacy_selection_requires_the_lock_to_remain_absent(self) -> None:
+    def test_snapshot_rejects_a_changed_intake_and_lock_together(self) -> None:
         gateway = FakeGateway()
-        gateway.intake_targets[PUBLICATION_LOCK_BRANCH] = None
-        legacy = replace(self.config, publication_lock_commit=None)
-        self.assertEqual(ReleasePublisher(gateway, legacy).run(), PublishState.ATTESTED)
-
-        raced_gateway = FakeGateway()
-        with self.assertRaisesRegex(PublishError, "publication lock changed"):
-            ReleasePublisher(raced_gateway, legacy).run()
-        self.assertIsNone(raced_gateway.release)
+        gateway.intake_targets[BRANCH] = "d" * 40
+        gateway.intake_targets[PUBLICATION_LOCK_BRANCH] = "d" * 40
+        with self.assertRaisesRegex(PublishError, "intake ref changed"):
+            self.publisher(gateway).run()
+        self.assertIsNone(gateway.release)
 
     def test_recovered_partial_draft_uploads_only_missing_and_is_never_deleted(self) -> None:
         gateway = FakeGateway(recovered=True)

@@ -301,6 +301,8 @@ def prepare_pending_intake(
             "invalid_candidates": [],
             "publication_lock_commit": publication_lock_commit,
         }
+    if publication_lock_commit == "none":
+        raise PreparationError("available intake selection requires a publication lock")
     if not candidates:
         raise PreparationError("available intake selection has no candidates")
     if output.exists() or output.is_symlink():

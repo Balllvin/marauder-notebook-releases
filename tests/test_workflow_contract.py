@@ -210,7 +210,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_published_attestations_are_reconciled_on_later_idle_runs(self) -> None:
         workflow = self.workflow()
         before = workflow.index("Audit the current immutable release before publication")
-        selection = workflow.index("Select the locked or oldest legacy unpublished intake")
+        selection = workflow.index("Select the locked unpublished intake")
         after = workflow.index("Audit the current immutable release after publication")
         self.assertLess(before, selection)
         self.assertGreater(after, selection)

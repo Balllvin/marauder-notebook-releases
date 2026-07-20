@@ -59,27 +59,32 @@ class CommandGateway:
             check=False,
         ).returncode == 0
 
-    def intake_target(self, repository: str, branch: str) -> str | None:
+    def intake_snapshot(
+        self, repository: str, branches: tuple[str, ...]
+    ) -> dict[str, str | None]:
+        if not branches or len(set(branches)) != len(branches):
+            raise GatewayError("intake snapshot branches must be unique")
+        expected_refs = {f"refs/heads/{branch}": branch for branch in branches}
         result = self._run(
             [
-                "git", "ls-remote", "--exit-code", "--heads",
-                f"https://github.com/{repository}.git", f"refs/heads/{branch}",
+                "git", "ls-remote", "--heads", f"https://github.com/{repository}.git",
+                *expected_refs,
             ],
             check=False,
         )
-        if result.returncode == 2:
-            return None
         if result.returncode != 0:
             message = result.stderr.decode("utf-8", errors="replace").strip()
-            raise GatewayError(message or "unable to read intake ref")
-        fields = result.stdout.decode("ascii").strip().split("\t")
-        if (
-            len(fields) != 2
-            or re.fullmatch(r"[0-9a-f]{40}", fields[0]) is None
-            or fields[1] != f"refs/heads/{branch}"
-        ):
-            raise GatewayError("intake ref has an invalid identity")
-        return fields[0]
+            raise GatewayError(message or "unable to read intake refs")
+        snapshot: dict[str, str | None] = {branch: None for branch in branches}
+        for line in result.stdout.decode("ascii").splitlines():
+            fields = line.split("\t")
+            if len(fields) != 2 or re.fullmatch(r"[0-9a-f]{40}", fields[0]) is None:
+                raise GatewayError("intake ref has an invalid identity")
+            branch = expected_refs.get(fields[1])
+            if branch is None or snapshot[branch] is not None:
+                raise GatewayError("intake snapshot contains an unexpected ref")
+            snapshot[branch] = fields[0]
+        return snapshot
 
     def current_tag_target(self, repository: str, tag: str) -> str | None:
         owner, name = repository.split("/", 1)

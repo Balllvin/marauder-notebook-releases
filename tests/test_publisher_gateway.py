@@ -43,7 +43,7 @@ class PublisherGatewayTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
-    def test_intake_target_distinguishes_a_valid_ref_from_an_absent_ref(self) -> None:
+    def test_intake_snapshot_reads_present_and_absent_refs_in_one_request(self) -> None:
         real_run = subprocess.run
 
         def local_ls_remote(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -59,10 +59,12 @@ class PublisherGatewayTests(unittest.TestCase):
             "run",
             side_effect=local_ls_remote,
         ):
-            self.assertEqual(gateway.intake_target("Balllvin/intake", self.branch), self.commit)
-            self.assertIsNone(gateway.intake_target("Balllvin/intake", "missing"))
+            self.assertEqual(
+                gateway.intake_snapshot("Balllvin/intake", (self.branch, "missing")),
+                {self.branch: self.commit, "missing": None},
+            )
 
-    def test_intake_target_rejects_malformed_or_failed_ref_reads(self) -> None:
+    def test_intake_snapshot_rejects_malformed_unexpected_or_failed_ref_reads(self) -> None:
         gateway = publisher_gateway.CommandGateway()
         malformed = subprocess.CompletedProcess(
             args=["git"],
@@ -74,7 +76,17 @@ class PublisherGatewayTests(unittest.TestCase):
         )
         with mock.patch.object(gateway, "_run", return_value=malformed):
             with self.assertRaisesRegex(publisher_gateway.GatewayError, "invalid identity"):
-                gateway.intake_target("Balllvin/intake", self.branch)
+                gateway.intake_snapshot("Balllvin/intake", (self.branch,))
+
+        unexpected = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout=f"{self.commit}\trefs/heads/unexpected\n".encode(),
+            stderr=b"",
+        )
+        with mock.patch.object(gateway, "_run", return_value=unexpected):
+            with self.assertRaisesRegex(publisher_gateway.GatewayError, "unexpected ref"):
+                gateway.intake_snapshot("Balllvin/intake", (self.branch,))
 
         failed = subprocess.CompletedProcess(
             args=["git"],
@@ -84,7 +96,7 @@ class PublisherGatewayTests(unittest.TestCase):
         )
         with mock.patch.object(gateway, "_run", return_value=failed):
             with self.assertRaisesRegex(publisher_gateway.GatewayError, "transport failed"):
-                gateway.intake_target("Balllvin/intake", self.branch)
+                gateway.intake_snapshot("Balllvin/intake", (self.branch,))
 
 
 if __name__ == "__main__":
