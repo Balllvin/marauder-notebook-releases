@@ -1,6 +1,6 @@
 # Marauder Notebook downloads
 
-This repository is the public distribution boundary for Marauder Notebook. It contains no application source code and has no write deploy key. Release candidates arrive as inert Git data in a separate Actions-disabled intake repository; only this repository's protected scheduled publisher can turn one into a release.
+This repository is the public distribution boundary for Marauder Notebook. It contains no application source code and has no write deploy key. Release candidates arrive as inert Git data in a separate Actions-disabled intake repository; only the reviewed publisher on this repository's protected `main` can turn one into a release.
 
 ## Download and open
 
@@ -43,7 +43,7 @@ The independent root and release private keys never enter this repository. The o
 
 Independent certificates have no Apple Team Identifier, so Sparkle cannot apply its optional Apple-team policy to XPC client connections and explicitly treats that policy as non-security-critical. The account-free path does not claim that Apple-team check. Update authenticity instead fails closed on the Ed25519-signed feed and archive, and every shipped updater executable is sealed under the pinned Marauder root identity. Enabling the Apple-team policy would require an Apple-issued signing identity.
 
-GitHub immutable releases protect final tags and assets after publication. Every scheduled run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
+GitHub immutable releases protect final tags and assets after publication. Every publisher run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
 
 Every candidate after the first carries the previous published source commit inside its signed provenance. The publisher downloads the latest immutable manifest, verifies both signatures, and requires an exact link before publication. The private producer separately proves that the candidate source descends from that commit. This prevents a higher version number from republishing older source and rejects candidates emitted by historical workflows that lack the signed continuity field.
 
@@ -63,4 +63,20 @@ scripts/configure_branch_protection.sh --apply
 
 The script fails unless it is operating on this exact repository and verifies that the required check was retained. It is not run by CI and never changes repository settings implicitly.
 
-The five-minute schedule remains the normal publisher trigger. An intake is eligible only when its versioned branch points to the same commit as `publication-lock/notebook`; unlocked publication branches fail closed. The producer creates or moves the branch and lock atomically and cannot move a locked candidate until its signed manifest is published byte-for-byte. The publisher reads both refs in one snapshot before work and again immediately before publication. If GitHub disables scheduled workflows after inactivity, a repository administrator can manually dispatch `Notebook release publisher` on `main`. The workflow rejects every other ref, checks out `main` explicitly, and proves it is running the current protected commit before touching intake.
+The supported publisher is local and deliberate. From a clean checkout whose `HEAD` exactly matches canonical protected `main`, first run the non-mutating verification mode:
+
+```bash
+scripts/publish_local.sh --verify
+```
+
+When a locked intake is ready, publish it explicitly:
+
+```bash
+scripts/publish_local.sh --publish
+```
+
+The command requires macOS, authenticated `gh` access scoped to this release repository, the required protected-main policy, and GitHub immutable releases. It never reads source-signing keys or the intake deploy key. It selects and extracts intake data in a temporary repository, verifies the archive before expansion, verifies the complete app identity, checks signed source continuity and monotonic version/build history, byte-compares every uploaded asset, and verifies the final release and asset attestations. Verification is the default; only `--publish` may create a draft or release.
+
+GitHub Actions remains an optional unattended trigger that calls this exact script. It is not required for local publication and does not own a second release implementation.
+
+An intake is eligible only when its versioned branch points to the same commit as `publication-lock/notebook`; unlocked publication branches fail closed. The producer creates or moves the branch and lock atomically and cannot move a locked candidate until its signed manifest is published byte-for-byte. The publisher reads both refs in one snapshot before work and again immediately before publication.

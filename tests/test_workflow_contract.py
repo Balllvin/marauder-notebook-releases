@@ -16,22 +16,28 @@ class WorkflowContractTests(unittest.TestCase):
             REPOSITORY_ROOT / ".github" / "workflows" / "notebook-release-publish.yml"
         ).read_text(encoding="utf-8")
 
+    def publisher(self) -> str:
+        return (REPOSITORY_ROOT / "scripts" / "publish_local.sh").read_text(
+            encoding="utf-8"
+        )
+
     def test_publisher_schedule_and_manual_fallback_use_only_protected_main(self) -> None:
         workflow = self.workflow()
         self.assertIn("schedule:", workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("workflow_run:", workflow)
         self.assertNotIn("\n  push:", workflow)
-        self.assertIn("Balllvin/marauder-notebook-release-intake", workflow)
-        self.assertIn("scripts/prepare_intake.py prepare-pending", workflow)
-        self.assertIn("publication_lock_commit", workflow)
-        self.assertIn('--publication-lock-commit "$PUBLICATION_LOCK_COMMIT"', workflow)
-        self.assertIn("refs/remotes/intake/publication/*", workflow)
         self.assertIn("ref: refs/heads/main", workflow)
-        self.assertIn('[[ "$GITHUB_REF" == "refs/heads/main" ]]', workflow)
-        self.assertIn("git fetch --no-tags origin main:refs/remotes/origin/main", workflow)
+        self.assertIn("scripts/publish_local.sh --publish", workflow)
         self.assertNotIn("github.sha", workflow)
         self.assertIn("fetch-depth: 0", workflow)
+        publisher = self.publisher()
+        self.assertIn("Balllvin/marauder-notebook-release-intake", publisher)
+        self.assertIn("scripts/prepare_intake.py prepare-pending", publisher)
+        self.assertIn('PUBLICATION_LOCK_COMMIT="$(jq -er .publication_lock_commit', publisher)
+        self.assertIn('--publication-lock-commit "$PUBLICATION_LOCK_COMMIT"', publisher)
+        self.assertIn("refs/remotes/intake/publication/*", publisher)
+        self.assertIn("git fetch origin refs/heads/main:refs/remotes/origin/main --prune", publisher)
 
     def test_no_pending_intake_is_a_successful_idle_run(self) -> None:
         jq = shutil.which("jq")
@@ -42,9 +48,9 @@ class WorkflowContractTests(unittest.TestCase):
             'then (.available | tostring) '
             'else error("available must be a boolean") end'
         )
-        workflow = self.workflow()
-        self.assertIn('if (.available | type) == "boolean"', workflow)
-        self.assertNotIn("jq -er '.available'", workflow)
+        publisher = self.publisher()
+        self.assertIn('if (.available | type) == "boolean"', publisher)
+        self.assertNotIn("jq -er '.available'", publisher)
         result = subprocess.run(
             [jq, "-r", program],
             input='{"available":false}\n',
@@ -56,19 +62,18 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(result.stdout, "false\n")
 
     def test_default_publisher_requires_no_apple_credentials(self) -> None:
-        workflow = self.workflow()
-        self.assertIn("NOTEBOOK_DISTRIBUTION_MODE: independent", workflow)
-        self.assertIn('NOTEBOOK_EXPECTED_TEAM_IDENTIFIER: ""', workflow)
-        self.assertIn("scripts/verify_app_bundle.py", workflow)
-        self.assertIn('--distribution-mode "$NOTEBOOK_DISTRIBUTION_MODE"', workflow)
-        self.assertIn('[[ -z "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER" ]]', workflow)
-        self.assertNotIn("secrets.APPLE", workflow)
-        self.assertNotIn("notarytool", workflow)
-        self.assertNotIn("security import", workflow)
-        self.assertNotIn("Contents/MacOS/MarauderNotebook", workflow)
+        contract = self.workflow() + self.publisher()
+        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=independent", contract)
+        self.assertIn('export NOTEBOOK_EXPECTED_TEAM_IDENTIFIER=""', contract)
+        self.assertIn("scripts/verify_app_bundle.py", contract)
+        self.assertIn("--distribution-mode independent", contract)
+        self.assertNotIn("secrets.APPLE", contract)
+        self.assertNotIn("notarytool", contract)
+        self.assertNotIn("security import", contract)
+        self.assertNotIn("Contents/MacOS/MarauderNotebook", contract)
 
     def test_publication_keeps_all_distribution_gates_before_publish(self) -> None:
-        workflow = self.workflow()
+        workflow = self.publisher()
         publisher = (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
             encoding="utf-8"
         )
@@ -82,9 +87,7 @@ class WorkflowContractTests(unittest.TestCase):
             "--previous-manifest",
             "scripts/verify_release_archive.py",
             "scripts/verify_app_bundle.py",
-            "NOTEBOOK_DISTRIBUTION_MODE: independent",
-            "xcrun stapler validate",
-            "spctl --assess --type execute",
+            "export NOTEBOOK_DISTRIBUTION_MODE=independent",
         ):
             self.assertIn(contract, workflow)
         for contract in (
@@ -124,20 +127,17 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, verifier)
 
-    def test_developer_id_and_gatekeeper_checks_are_dormant_and_explicit(self) -> None:
-        workflow = self.workflow()
-        developer_guard = 'if [[ "$NOTEBOOK_DISTRIBUTION_MODE" == "developer-id" ]]'
-        self.assertGreaterEqual(workflow.count(developer_guard), 2)
+    def test_local_publication_is_fixed_to_independent_signing(self) -> None:
+        workflow = self.publisher()
+        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=independent", workflow)
+        self.assertIn("--distribution-mode independent", workflow)
+        self.assertNotIn("developer-id", workflow)
         self.assertIn(
             'cfg.distribution_mode == "developer-id"',
             (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
                 encoding="utf-8"
             ),
         )
-        self.assertIn('--expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"', workflow)
-        self.assertIn("xcrun stapler validate", workflow)
-        self.assertIn("spctl --assess --type execute", workflow)
-        self.assertLess(workflow.index(developer_guard), workflow.index("xcrun stapler validate"))
 
     def test_user_copy_is_honest_about_the_one_time_gatekeeper_choice(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
@@ -151,7 +151,7 @@ class WorkflowContractTests(unittest.TestCase):
             "Sparkle Ed25519 archive signature",
         ):
             self.assertIn(contract, readme)
-        self.assertIn("NOTEBOOK_DISTRIBUTION_MODE: independent", self.workflow())
+        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=independent", self.publisher())
         self.assertIn(
             "Independently signed universal macOS application",
             (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
@@ -161,7 +161,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("Keychain", readme)
 
     def test_partial_drafts_are_repaired_before_exact_byte_publication(self) -> None:
-        workflow = self.workflow()
+        workflow = self.publisher()
         publisher = (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
             encoding="utf-8"
         )
@@ -177,7 +177,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("gh release upload", workflow)
 
     def test_publish_boundary_is_revocable_and_cleanup_stops_before_publish(self) -> None:
-        workflow = self.workflow()
+        workflow = self.publisher()
         publisher = (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
             encoding="utf-8"
         )
@@ -194,10 +194,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("git/refs/tags/$RELEASE_TAG", workflow)
         self.assertNotIn("OWNED_TAG_CREATED", workflow)
         self.assertIn('"git", "merge-base", "--is-ancestor"', gateway)
-        self.assertIn('PUBLISHER_COMMIT="$(git rev-parse HEAD)"', workflow)
+        self.assertIn('PUBLISHER_COMMIT="$(git rev-parse HEAD^{commit})"', workflow)
 
     def test_tag_discovery_fails_closed_without_destructive_cleanup(self) -> None:
-        workflow = self.workflow()
+        workflow = self.publisher()
         gateway = (REPOSITORY_ROOT / "scripts" / "publisher_gateway.py").read_text(
             encoding="utf-8"
         )
@@ -208,14 +208,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("--method DELETE \"repos/$GITHUB_REPOSITORY/git/refs/tags", workflow)
 
     def test_published_attestations_are_reconciled_on_later_idle_runs(self) -> None:
-        workflow = self.workflow()
-        before = workflow.index("Audit the current immutable release before publication")
-        selection = workflow.index("Select the locked unpublished intake")
-        after = workflow.index("Audit the current immutable release after publication")
-        self.assertLess(before, selection)
-        self.assertGreater(after, selection)
-        self.assertEqual(workflow.count("run: scripts/audit_latest_release.sh"), 2)
-        self.assertIn("always() && !cancelled()", workflow)
+        workflow = self.publisher()
+        selection = workflow.index("prepare_intake.py select")
+        self.assertLess(workflow.index("scripts/audit_latest_release.sh"), selection)
+        self.assertGreater(workflow.rindex("scripts/audit_latest_release.sh"), selection)
+        self.assertEqual(workflow.count("scripts/audit_latest_release.sh"), 2)
 
         audit = (REPOSITORY_ROOT / "scripts" / "audit_latest_release.sh").read_text(
             encoding="utf-8"
@@ -237,6 +234,7 @@ class WorkflowContractTests(unittest.TestCase):
             "configure_branch_protection.sh",
             "install_actionlint.sh",
             "publish_release.py",
+            "publish_local.sh",
             "verify_openssl.sh",
         ):
             mode = (REPOSITORY_ROOT / "scripts" / name).stat().st_mode
@@ -291,7 +289,10 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_publish_workflow_delegates_the_release_state_machine(self) -> None:
         workflow = self.workflow()
-        self.assertIn("python3 scripts/publish_release.py", workflow)
+        publisher = self.publisher()
+        self.assertIn("scripts/publish_local.sh --publish", workflow)
+        self.assertNotIn("scripts/publish_release.py", workflow)
+        self.assertIn("python3 scripts/publish_release.py", publisher)
         for legacy_shell in (
             "cleanup_failed_draft",
             "current_tag_target()",
