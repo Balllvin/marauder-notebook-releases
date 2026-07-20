@@ -14,10 +14,12 @@ from typing import Protocol
 
 try:
     from . import release_state, verify_intake
+    from .intake_selection import PUBLICATION_LOCK_BRANCH
     from .publisher_gateway import CommandGateway, GatewayError
 except ImportError:
     import release_state
     import verify_intake
+    from intake_selection import PUBLICATION_LOCK_BRANCH
     from publisher_gateway import CommandGateway, GatewayError
 
 
@@ -51,6 +53,7 @@ class PublishConfig:
     source_commit: str
     intake_branch: str
     intake_commit: str
+    publication_lock_commit: str | None
     intake: Path
     work: Path
     distribution_mode: str
@@ -59,7 +62,7 @@ class PublishConfig:
 class Gateway(Protocol):
     def head(self) -> str: ...
     def is_ancestor(self, ancestor: str, descendant: str) -> bool: ...
-    def intake_target(self, repository: str, branch: str) -> str: ...
+    def intake_target(self, repository: str, branch: str) -> str | None: ...
     def current_tag_target(self, repository: str, tag: str) -> str | None: ...
     def list_releases(self, repository: str) -> list[object]: ...
     def create_draft(self, repository: str, payload: dict[str, object]) -> object: ...
@@ -93,6 +96,10 @@ class ReleasePublisher:
             self.config.intake_repository, self.config.intake_branch
         ) != self.config.intake_commit:
             raise PublishError("intake ref changed during publication")
+        if self.gateway.intake_target(
+            self.config.intake_repository, PUBLICATION_LOCK_BRANCH
+        ) != self.config.publication_lock_commit:
+            raise PublishError("publication lock changed during publication")
 
     def _cleanup_owned_draft(self) -> None:
         if self.owned_release_id is None or self.state >= PublishState.PUBLISH_ATTEMPTED:
@@ -262,6 +269,14 @@ def _config(arguments: argparse.Namespace) -> PublishConfig:
         raise PublishError("publisher, source, and intake commits must be exact lowercase SHAs")
     if arguments.repository != REPOSITORY or arguments.intake_repository != INTAKE_REPOSITORY:
         raise PublishError("publisher repositories do not match the protected contract")
+    publication_lock_commit = (
+        None if arguments.publication_lock_commit == "none" else arguments.publication_lock_commit
+    )
+    if publication_lock_commit is not None and (
+        COMMIT.fullmatch(publication_lock_commit) is None
+        or publication_lock_commit != arguments.intake_commit
+    ):
+        raise PublishError("publication lock does not identify the selected intake")
     if arguments.distribution_mode not in ("independent", "developer-id"):
         raise PublishError("unsupported distribution mode")
     if (
@@ -297,6 +312,7 @@ def _config(arguments: argparse.Namespace) -> PublishConfig:
         source_commit=arguments.source_commit,
         intake_branch=arguments.intake_branch,
         intake_commit=arguments.intake_commit,
+        publication_lock_commit=publication_lock_commit,
         intake=arguments.intake,
         work=arguments.work,
         distribution_mode=arguments.distribution_mode,
@@ -308,7 +324,7 @@ def parser() -> argparse.ArgumentParser:
     for name in (
         "repository", "intake-repository", "publisher-commit", "release-version",
         "build-number", "release-tag", "archive-name", "source-commit", "intake-branch",
-        "intake-commit", "distribution-mode",
+        "intake-commit", "publication-lock-commit", "distribution-mode",
     ):
         result.add_argument(f"--{name}", required=True)
     result.add_argument("--intake", required=True, type=Path)

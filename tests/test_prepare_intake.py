@@ -151,6 +151,154 @@ class PrepareIntakeTests(unittest.TestCase):
         result = prepare_intake.select_pending_intake(refs, releases)
         self.assertEqual(result["branch"], f"publication/1.3.0-50-{'c' * 40}")
         self.assertEqual(result["commit"], "d" * 40)
+        self.assertEqual(result["publication_lock_commit"], "none")
+
+    def test_publication_lock_selects_only_its_matching_candidate(self) -> None:
+        refs = self.root / "refs.json"
+        releases = self.root / "releases.json"
+        locked_commit = "d" * 40
+        refs.write_text(
+            json.dumps(
+                [
+                    {
+                        "ref": f"refs/heads/publication/1.2.0-40-{'a' * 40}",
+                        "object": {"type": "commit", "sha": "b" * 40},
+                    },
+                    {
+                        "ref": f"refs/heads/publication/1.3.0-50-{'c' * 40}",
+                        "object": {"type": "commit", "sha": locked_commit},
+                    },
+                    {
+                        "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                        "object": {"type": "commit", "sha": locked_commit},
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        releases.write_text("[]\n", encoding="utf-8")
+        result = prepare_intake.select_pending_intake(refs, releases)
+        self.assertEqual(result["branch"], f"publication/1.3.0-50-{'c' * 40}")
+        self.assertEqual(result["commit"], locked_commit)
+        self.assertEqual(result["candidates"], [{"branch": result["branch"], "commit": locked_commit}])
+        self.assertEqual(result["publication_lock_commit"], locked_commit)
+        self.assertEqual(result["ignored_ref_count"], 1)
+
+    def test_discovery_reads_publication_branches_and_lock_from_one_git_snapshot(self) -> None:
+        remote = self.root / "intake.git"
+        self.git(self.root, "init", "--bare", str(remote))
+        repository = self.root / "seed"
+        repository.mkdir()
+        self.git(repository, "init", "-b", "main")
+        self.git(repository, "config", "user.name", "Release test")
+        self.git(repository, "config", "user.email", "release-test@example.invalid")
+        (repository / "README.md").write_text("intake\n", encoding="utf-8")
+        self.git(repository, "add", "README.md")
+        self.git(repository, "commit", "-m", "Create intake")
+        commit = self.git(repository, "rev-parse", "HEAD")
+        branch = f"publication/1.2.3-42-{'a' * 40}"
+        self.git(
+            repository,
+            "push",
+            str(remote),
+            f"{commit}:refs/heads/{branch}",
+            f"{commit}:{prepare_intake.PUBLICATION_LOCK_REF}",
+        )
+        releases = self.root / "releases.json"
+        releases.write_text("[]\n", encoding="utf-8")
+
+        real_run = subprocess.run
+        calls: list[list[str]] = []
+
+        def local_ls_remote(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            calls.append(arguments)
+            redirected = list(arguments)
+            redirected[3] = str(remote)
+            return real_run(redirected, **kwargs)
+
+        with mock.patch.object(
+            prepare_intake.subprocess,
+            "run",
+            side_effect=local_ls_remote,
+        ):
+            result = prepare_intake.discover_pending_intake(
+                "https://github.com/example/intake.git",
+                releases,
+            )
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            calls[0][4:],
+            ["refs/heads/publication/*", prepare_intake.PUBLICATION_LOCK_REF],
+        )
+        self.assertEqual(result["branch"], branch)
+        self.assertEqual(result["commit"], commit)
+        self.assertEqual(result["publication_lock_commit"], commit)
+
+    def test_published_locked_candidate_is_an_idle_success(self) -> None:
+        refs = self.root / "refs.json"
+        releases = self.root / "releases.json"
+        locked_commit = "b" * 40
+        refs.write_text(
+            json.dumps(
+                [
+                    {
+                        "ref": f"refs/heads/publication/1.2.0-40-{'a' * 40}",
+                        "object": {"type": "commit", "sha": locked_commit},
+                    },
+                    {
+                        "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                        "object": {"type": "commit", "sha": locked_commit},
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        releases.write_text(
+            json.dumps([{"tag_name": "notebook-v1.2.0-40", "draft": False}]),
+            encoding="utf-8",
+        )
+        result = prepare_intake.select_pending_intake(refs, releases)
+        self.assertFalse(result["available"])
+        self.assertEqual(result["publication_lock_commit"], locked_commit)
+
+    def test_rejects_missing_malformed_or_ambiguous_locked_candidate(self) -> None:
+        releases = self.root / "releases.json"
+        releases.write_text("[]\n", encoding="utf-8")
+        cases = (
+            [
+                {
+                    "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                    "object": {"type": "blob", "sha": "a" * 40},
+                }
+            ],
+            [
+                {
+                    "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                    "object": {"type": "commit", "sha": "a" * 40},
+                }
+            ],
+            [
+                {
+                    "ref": f"refs/heads/publication/1.2.0-40-{'a' * 40}",
+                    "object": {"type": "commit", "sha": "b" * 40},
+                },
+                {
+                    "ref": f"refs/heads/publication/1.3.0-50-{'c' * 40}",
+                    "object": {"type": "commit", "sha": "b" * 40},
+                },
+                {
+                    "ref": prepare_intake.PUBLICATION_LOCK_REF,
+                    "object": {"type": "commit", "sha": "b" * 40},
+                },
+            ],
+        )
+        for index, payload in enumerate(cases):
+            with self.subTest(index=index):
+                refs = self.root / f"refs-{index}.json"
+                refs.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaises(prepare_intake.PreparationError):
+                    prepare_intake.select_pending_intake(refs, releases)
 
     def test_quarantines_duplicate_identity_without_starving_a_valid_candidate(self) -> None:
         refs = self.root / "refs.json"
@@ -235,6 +383,7 @@ class PrepareIntakeTests(unittest.TestCase):
             json.dumps(
                 {
                     "available": True,
+                    "publication_lock_commit": "none",
                     "candidates": [
                         {"branch": lower_branch, "commit": "b" * 40},
                         {"branch": later_branch, "commit": "d" * 40},
@@ -276,6 +425,7 @@ class PrepareIntakeTests(unittest.TestCase):
             json.dumps(
                 {
                     "available": True,
+                    "publication_lock_commit": "none",
                     "candidates": [
                         {
                             "branch": f"publication/1.2.3-42-{'a' * 40}",
@@ -306,10 +456,44 @@ class PrepareIntakeTests(unittest.TestCase):
                     openssl="openssl",
                 )
 
+    def test_prepare_rejects_a_selection_that_does_not_match_its_lock(self) -> None:
+        selection = self.root / "selection.json"
+        selection.write_text(
+            json.dumps(
+                {
+                    "available": True,
+                    "publication_lock_commit": "a" * 40,
+                    "candidates": [
+                        {
+                            "branch": f"publication/1.2.3-42-{'b' * 40}",
+                            "commit": "c" * 40,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            prepare_intake.PreparationError,
+            "different candidate",
+        ):
+            prepare_intake.prepare_pending_intake(
+                self.root,
+                selection,
+                self.root / "verified-intake",
+                openssl="openssl",
+            )
+
     def test_no_pending_candidates_remains_an_idle_success(self) -> None:
         selection = self.root / "selection.json"
         selection.write_text(
-            json.dumps({"available": False, "candidates": []}),
+            json.dumps(
+                {
+                    "available": False,
+                    "candidates": [],
+                    "publication_lock_commit": "none",
+                }
+            ),
             encoding="utf-8",
         )
         result = prepare_intake.prepare_pending_intake(
@@ -324,6 +508,7 @@ class PrepareIntakeTests(unittest.TestCase):
                 "available": False,
                 "invalid_candidate_count": 0,
                 "invalid_candidates": [],
+                "publication_lock_commit": "none",
             },
         )
         self.assertFalse((self.root / "verified-intake").exists())

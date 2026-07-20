@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -58,15 +59,25 @@ class CommandGateway:
             check=False,
         ).returncode == 0
 
-    def intake_target(self, repository: str, branch: str) -> str:
+    def intake_target(self, repository: str, branch: str) -> str | None:
         result = self._run(
             [
                 "git", "ls-remote", "--exit-code", "--heads",
                 f"https://github.com/{repository}.git", f"refs/heads/{branch}",
-            ]
-        ).stdout.decode("ascii").strip()
-        fields = result.split("\t")
-        if len(fields) != 2 or fields[1] != f"refs/heads/{branch}":
+            ],
+            check=False,
+        )
+        if result.returncode == 2:
+            return None
+        if result.returncode != 0:
+            message = result.stderr.decode("utf-8", errors="replace").strip()
+            raise GatewayError(message or "unable to read intake ref")
+        fields = result.stdout.decode("ascii").strip().split("\t")
+        if (
+            len(fields) != 2
+            or re.fullmatch(r"[0-9a-f]{40}", fields[0]) is None
+            or fields[1] != f"refs/heads/{branch}"
+        ):
             raise GatewayError("intake ref has an invalid identity")
         return fields[0]
 

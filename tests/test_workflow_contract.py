@@ -24,6 +24,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("\n  push:", workflow)
         self.assertIn("Balllvin/marauder-notebook-release-intake", workflow)
         self.assertIn("scripts/prepare_intake.py prepare-pending", workflow)
+        self.assertIn("publication_lock_commit", workflow)
+        self.assertIn('--publication-lock-commit "$PUBLICATION_LOCK_COMMIT"', workflow)
         self.assertIn("refs/remotes/intake/publication/*", workflow)
         self.assertIn("ref: refs/heads/main", workflow)
         self.assertIn('[[ "$GITHUB_REF" == "refs/heads/main" ]]', workflow)
@@ -208,7 +210,7 @@ class WorkflowContractTests(unittest.TestCase):
     def test_published_attestations_are_reconciled_on_later_idle_runs(self) -> None:
         workflow = self.workflow()
         before = workflow.index("Audit the current immutable release before publication")
-        selection = workflow.index("Select the oldest unpublished intake")
+        selection = workflow.index("Select the locked or oldest legacy unpublished intake")
         after = workflow.index("Audit the current immutable release after publication")
         self.assertLess(before, selection)
         self.assertGreater(after, selection)
