@@ -45,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: scripts/audit_latest_release.sh
 
-      - name: Select the oldest unpublished intake
+      - name: Select the locked or oldest legacy unpublished intake
         id: intake
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -96,7 +96,7 @@ jobs:
           if [[ "$INVALID_COUNT" -gt 0 ]]; then
             echo "Quarantined $INVALID_COUNT invalid intake candidate(s) before selecting a verified release."
           fi
-          for field in version build_number tag archive source_commit branch intake_commit; do
+          for field in version build_number tag archive source_commit branch intake_commit publication_lock_commit; do
             value="$(jq -er --arg field "$field" '.[$field]' "$RESULT")"
             printf '%s=%s\n' "$field" "$value" >>"$GITHUB_OUTPUT"
           done
@@ -196,6 +196,7 @@ jobs:
           SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
           INTAKE_BRANCH: ${{ steps.release.outputs.branch }}
           INTAKE_COMMIT: ${{ steps.release.outputs.intake_commit }}
+          PUBLICATION_LOCK_COMMIT: ${{ steps.release.outputs.publication_lock_commit }}
         run: |
           PUBLISHER_COMMIT="$(git rev-parse HEAD)"
           python3 scripts/publish_release.py \
@@ -209,6 +210,7 @@ jobs:
             --source-commit "$SOURCE_COMMIT" \
             --intake-branch "$INTAKE_BRANCH" \
             --intake-commit "$INTAKE_COMMIT" \
+            --publication-lock-commit "$PUBLICATION_LOCK_COMMIT" \
             --intake "$RUNNER_TEMP/verified-intake" \
             --work "$RUNNER_TEMP/publish-state" \
             --distribution-mode "$NOTEBOOK_DISTRIBUTION_MODE"
