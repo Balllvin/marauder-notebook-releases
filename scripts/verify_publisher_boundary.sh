@@ -43,7 +43,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$SCRIPT_DIR/install_actionlint.sh" "$ACTIONLINT_ROOT"
+scripts/install_actionlint.sh "$ACTIONLINT_ROOT"
 "$ACTIONLINT_ROOT/actionlint" \
   .github/workflows/notebook-release-publish.yml \
   .github/workflows/publisher-ci.yml

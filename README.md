@@ -56,7 +56,7 @@ scripts/verify_publisher_boundary.sh \
   --root /path/to/candidate-checkout
 ```
 
-The verifier performs the compile, shell, OpenSSL, actionlint, and complete test-suite checks without GitHub credentials or repository mutations. The optional `.github/workflows/publisher-ci.yml` only reverifies protected `main` after a push or manual dispatch; it is informational and is not required for merging or publication. The tracked bootstrap prints the complete intended branch policy without changing GitHub by default:
+The verifier performs the compile, shell, OpenSSL, actionlint, and complete test-suite checks without GitHub credentials or repository mutations. The optional `.github/workflows/publisher-ci.yml` is a manual mirror for environments that have hosted runners; it is informational and is not required for merging or publication. The tracked bootstrap prints the complete intended branch policy without changing GitHub by default:
 
 ```bash
 scripts/configure_branch_protection.sh
@@ -84,6 +84,6 @@ scripts/publish_local.sh --publish
 
 The command requires macOS, authenticated `gh` access scoped to this release repository, the required protected-main policy, and GitHub immutable releases. It never reads source-signing keys or the intake deploy key. It selects and extracts intake data in a temporary repository, verifies the archive before expansion, verifies the complete app identity, checks signed source continuity and monotonic version/build history, byte-compares every uploaded asset, and verifies the final release and asset attestations. Verification is the default; only `--publish` may create a draft or release.
 
-GitHub Actions remains an optional unattended trigger that calls this exact script. It is not required for local publication and does not own a second release implementation.
+GitHub Actions remains an optional manually dispatched mirror that calls this exact script. It is not required for local publication and does not own a second release implementation.
 
 An intake is eligible only when its versioned branch points to the same commit as `publication-lock/notebook`; unlocked publication branches fail closed. The producer creates or moves the branch and lock atomically and cannot move a locked candidate until its signed manifest is published byte-for-byte. The publisher reads both refs in one snapshot before work and again immediately before publication.

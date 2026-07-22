@@ -21,10 +21,10 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-    def test_publisher_schedule_and_manual_fallback_use_only_protected_main(self) -> None:
+    def test_manual_publisher_workflow_uses_only_protected_main(self) -> None:
         workflow = self.workflow()
-        self.assertIn("schedule:", workflow)
         self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("schedule:", workflow)
         self.assertNotIn("workflow_run:", workflow)
         self.assertNotIn("\n  push:", workflow)
         self.assertIn("ref: refs/heads/main", workflow)
@@ -254,20 +254,21 @@ class WorkflowContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         for contract in (
             "workflow_dispatch:",
-            "push:",
             "Reverify protected publisher main",
             "scripts/verify_publisher_boundary.sh",
         ):
             self.assertIn(contract, ci)
         self.assertNotIn("pull_request:", ci)
         self.assertNotIn("pull_request_target:", ci)
+        self.assertNotIn("\n  push:", ci)
+        self.assertNotIn("schedule:", ci)
         self.assertNotIn("statuses: write", ci)
         self.assertNotIn("statuses/$HEAD_SHA", ci)
         self.assertIn("Check out protected publisher main", ci)
         self.assertIn("ref: refs/heads/main", ci)
         self.assertIn("run: scripts/verify_publisher_boundary.sh", ci)
         for contract in (
-            '"$SCRIPT_DIR/install_actionlint.sh"',
+            'scripts/install_actionlint.sh "$ACTIONLINT_ROOT"',
             "notebook-release-publish.yml",
             "publisher-ci.yml",
             "python3 -m compileall -q scripts tests",
@@ -280,6 +281,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn(contract, local_verifier)
         for forbidden in ("--record-status", "GH_TOKEN", "GITHUB_TOKEN", "gh api"):
             self.assertNotIn(forbidden, local_verifier)
+        self.assertNotIn('"$SCRIPT_DIR/install_actionlint.sh"', local_verifier)
         for contract in (
             'REPOSITORY="Balllvin/marauder-notebook-releases"',
             '"required_status_checks": null',
