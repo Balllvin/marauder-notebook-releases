@@ -13,6 +13,39 @@ usage() {
   echo "usage: $0 [--root candidate-checkout] [--record-status]" >&2
 }
 
+die() {
+  echo "error: $*" >&2
+  exit 1
+}
+
+require_trusted_policy_checkout() {
+  local canonical_main_line
+  local origin_url
+  local policy_commit
+
+  [[ "$VERIFICATION_ROOT" != "$REPOSITORY_ROOT" ]] \
+    || die "status recording requires a separate candidate checkout"
+  cd "$REPOSITORY_ROOT"
+  [[ -z "$(git status --porcelain)" ]] \
+    || die "trusted publisher policy checkout must be clean"
+  origin_url="$(git remote get-url origin)"
+  case "$origin_url" in
+    git@github.com:Balllvin/marauder-notebook-releases.git|\
+    https://github.com/Balllvin/marauder-notebook-releases.git)
+      ;;
+    *) die "trusted publisher policy origin is not canonical" ;;
+  esac
+  git fetch origin refs/heads/main:refs/remotes/origin/main --prune
+  policy_commit="$(git rev-parse HEAD^{commit})"
+  [[ "$policy_commit" == "$(git rev-parse refs/remotes/origin/main^{commit})" ]] \
+    || die "trusted publisher policy must be exact current origin/main"
+  canonical_main_line="$(git ls-remote --exit-code \
+    "https://github.com/$REPOSITORY.git" refs/heads/main)" \
+    || die "canonical publisher main could not be verified"
+  [[ "$canonical_main_line" == "$policy_commit"$'\t'"refs/heads/main" ]] \
+    || die "trusted publisher policy must match canonical main"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --root)
@@ -28,6 +61,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 VERIFICATION_ROOT="$(cd "$VERIFICATION_ROOT" && pwd)"
+if [[ "$RECORD_STATUS" == "true" ]]; then
+  require_trusted_policy_checkout
+fi
 cd "$VERIFICATION_ROOT"
 [[ -z "$(git status --porcelain)" ]] || {
   echo "error: publisher checkout must be clean" >&2

@@ -49,7 +49,7 @@ Every candidate after the first carries the previous published source commit ins
 
 ## Publisher branch protection
 
-The `main` branch requires the `Verify publisher boundary` commit status. From a clean protected-`main` checkout, run its trusted verifier against the exact clean candidate checkout and record the successful result explicitly:
+The `main` branch requires the `Verify publisher boundary` commit status. From a separate clean protected-`main` checkout, run its trusted verifier against the exact clean candidate checkout and record the successful result explicitly:
 
 ```bash
 scripts/verify_publisher_boundary.sh \
@@ -57,7 +57,7 @@ scripts/verify_publisher_boundary.sh \
   --record-status
 ```
 
-Without `--record-status`, the command performs the same compile, shell, OpenSSL, actionlint, and complete test-suite verification without changing GitHub. The optional `.github/workflows/publisher-ci.yml` checks out the verifier from protected `main`, passes the proposed checkout through `--root`, and uses a read-only token; a separate no-checkout job reports its result. The proposed change can never replace the verifier that grants its own status. Hosted runners are therefore convenient but not required to satisfy the protected status. The tracked bootstrap prints the complete intended protection policy without changing GitHub by default:
+Status recording refuses to run from the candidate checkout. It first proves that the verifier's own checkout is clean, uses the canonical repository, and exactly matches both local and remote protected `main`; only then does it validate and report the candidate commit. Without `--record-status`, the command performs the same compile, shell, OpenSSL, actionlint, and complete test-suite verification without changing GitHub. The optional `.github/workflows/publisher-ci.yml` checks out the verifier from protected `main`, passes the proposed checkout through `--root`, and uses a read-only token; a separate no-checkout job reports its result. The proposed change can never replace the verifier that grants its own status. Hosted runners are therefore convenient but not required to satisfy the protected status. The tracked bootstrap prints the complete intended protection policy without changing GitHub by default:
 
 ```bash
 scripts/configure_branch_protection.sh

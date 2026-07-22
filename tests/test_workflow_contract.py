@@ -253,7 +253,7 @@ class WorkflowContractTests(unittest.TestCase):
             REPOSITORY_ROOT / "scripts" / "verify_publisher_boundary.sh"
         ).read_text(encoding="utf-8")
         for contract in (
-            "pull_request_target:",
+            "pull_request:",
             "push:",
             "Verify publisher boundary",
             "Run publisher boundary validation",
@@ -267,6 +267,7 @@ class WorkflowContractTests(unittest.TestCase):
             "github.event.pull_request.head.sha || github.sha",
         ):
             self.assertIn(contract, ci)
+        self.assertNotIn("pull_request_target:", ci)
         self.assertIn("Check out protected publisher policy", ci)
         self.assertIn("ref: refs/heads/main", ci)
         self.assertIn(
@@ -288,6 +289,13 @@ class WorkflowContractTests(unittest.TestCase):
             "--root",
             'context="$REQUIRED_CHECK"',
             '[[ -z "$(git status --porcelain)" ]]',
+            "require_trusted_policy_checkout",
+            "status recording requires a separate candidate checkout",
+            "trusted publisher policy checkout must be clean",
+            "trusted publisher policy must be exact current origin/main",
+            "trusted publisher policy must match canonical main",
+            "git fetch origin refs/heads/main:refs/remotes/origin/main --prune",
+            "git ls-remote --exit-code",
         ):
             self.assertIn(contract, local_verifier)
         for contract in (
@@ -305,6 +313,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"required_approving_review_count": 0', bootstrap)
         self.assertIn("--root /path/to/candidate-checkout", readme)
         self.assertIn("scripts/configure_branch_protection.sh --apply", readme)
+
+    def test_local_status_cannot_be_recorded_by_the_candidate_checkout(self) -> None:
+        result = subprocess.run(
+            [
+                str(REPOSITORY_ROOT / "scripts" / "verify_publisher_boundary.sh"),
+                "--root",
+                str(REPOSITORY_ROOT),
+                "--record-status",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "status recording requires a separate candidate checkout",
+            result.stderr,
+        )
+        self.assertNotIn("Recorded Verify publisher boundary", result.stdout)
 
     def test_publish_workflow_delegates_the_release_state_machine(self) -> None:
         workflow = self.workflow()
