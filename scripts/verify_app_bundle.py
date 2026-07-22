@@ -52,7 +52,7 @@ FEED_URL = (
     "https://github.com/Balllvin/marauder-notebook-releases/"
     "releases/latest/download/appcast.xml"
 )
-PUBLIC_ED_KEY = "Pp68s3Yv758+APzr4aMwpJNcXbOdJqkrMjS/7+i0LY0="
+PUBLIC_ED_KEY = "tWzGidYf3K08nkhu45CwWt/uJWERB+MT+UrpYjy4OXU="
 ICON_NAME = "AppIcon"
 ICON_FILE_NAME = f"{ICON_NAME}.icns"
 MAX_ICON_BYTES = 16 * 1024 * 1024
