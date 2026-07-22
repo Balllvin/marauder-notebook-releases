@@ -59,7 +59,8 @@ MAX_ICON_BYTES = 16 * 1024 * 1024
 MAX_INFO_PLIST_BYTES = 1024 * 1024
 ICON_SHA256 = "7f6b996cbc0fee7c93bfce2765d227d7ab4ba37905872b5345da0b37e30dda35"
 MICROPHONE_USAGE = (
-    "Marauder Notebook uses the microphone only while you dictate into a document."
+    "Marauder Notebook uses the microphone while you dictate or have an active voice "
+    "conversation in chat, a source, or a document."
 )
 SPEECH_RECOGNITION_USAGE = (
     "Marauder Notebook converts your dictation into document text when you start dictation."
