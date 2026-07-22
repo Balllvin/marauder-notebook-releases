@@ -253,30 +253,19 @@ class WorkflowContractTests(unittest.TestCase):
             REPOSITORY_ROOT / "scripts" / "verify_publisher_boundary.sh"
         ).read_text(encoding="utf-8")
         for contract in (
-            "pull_request:",
+            "workflow_dispatch:",
             "push:",
-            "Verify publisher boundary",
-            "Run publisher boundary validation",
-            "Report publisher validation",
+            "Reverify protected publisher main",
             "scripts/verify_publisher_boundary.sh",
-            "github.event.pull_request.head.sha || github.sha",
-            "github.event.pull_request.head.repo.full_name || github.repository",
-            "statuses: write",
-            '"repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA"',
-            'context="Verify publisher boundary"',
-            "github.event.pull_request.head.sha || github.sha",
         ):
             self.assertIn(contract, ci)
+        self.assertNotIn("pull_request:", ci)
         self.assertNotIn("pull_request_target:", ci)
-        self.assertIn("Check out protected publisher policy", ci)
+        self.assertNotIn("statuses: write", ci)
+        self.assertNotIn("statuses/$HEAD_SHA", ci)
+        self.assertIn("Check out protected publisher main", ci)
         self.assertIn("ref: refs/heads/main", ci)
-        self.assertIn(
-            "publisher-policy/scripts/verify_publisher_boundary.sh --root candidate",
-            ci,
-        )
-        self.assertNotIn("run: scripts/verify_publisher_boundary.sh", ci)
-        self.assertNotIn("name: Verify publisher boundary", ci)
-        self.assertLess(ci.index("needs: verify"), ci.index("statuses: write"))
+        self.assertIn("run: scripts/verify_publisher_boundary.sh", ci)
         for contract in (
             '"$SCRIPT_DIR/install_actionlint.sh"',
             "notebook-release-publish.yml",
