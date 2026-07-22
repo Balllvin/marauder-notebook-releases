@@ -53,7 +53,7 @@ class LocalPublisherTests(unittest.TestCase):
             '[[ "$PUBLISHER_COMMIT" == "$ORIGIN_MAIN_COMMIT" ]]',
             '"https://github.com/$REPOSITORY.git" refs/heads/main',
             '"repos/$REPOSITORY/branches/main/protection"',
-            ".required_status_checks.strict == true",
+            ".required_status_checks == null",
             ".enforce_admins.enabled == true",
             ".required_linear_history.enabled == true",
             ".required_conversation_resolution.enabled == true",

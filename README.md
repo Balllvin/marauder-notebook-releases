@@ -49,27 +49,26 @@ Every candidate after the first carries the previous published source commit ins
 
 ## Publisher branch protection
 
-The `main` branch requires the `Verify publisher boundary` commit status. From a separate clean protected-`main` checkout, run its trusted verifier against the exact clean candidate checkout and record the successful result explicitly:
+GitHub-hosted checks are not part of the publisher trust path. Before a publisher change is merged, run the tracked verifier locally against the exact clean candidate checkout:
 
 ```bash
 scripts/verify_publisher_boundary.sh \
-  --root /path/to/candidate-checkout \
-  --record-status
+  --root /path/to/candidate-checkout
 ```
 
-Status recording refuses to run from the candidate checkout. It first proves that the verifier's own checkout is clean, uses the canonical repository, and exactly matches both local and remote protected `main`; only then does it validate and report the candidate commit. Without `--record-status`, the command performs the same compile, shell, OpenSSL, actionlint, and complete test-suite verification without changing GitHub. The optional `.github/workflows/publisher-ci.yml` only reverifies protected `main` after a push or manual dispatch; it has no status-write permission and never executes candidate code. The protected-main local verifier is the sole owner of the required candidate status, so hosted runners are not part of the merge or publication path. The tracked bootstrap prints the complete intended protection policy without changing GitHub by default:
+The verifier performs the compile, shell, OpenSSL, actionlint, and complete test-suite checks without GitHub credentials or repository mutations. The optional `.github/workflows/publisher-ci.yml` only reverifies protected `main` after a push or manual dispatch; it is informational and is not required for merging or publication. The tracked bootstrap prints the complete intended branch policy without changing GitHub by default:
 
 ```bash
 scripts/configure_branch_protection.sh
 ```
 
-After a local result has been recorded and the policy has been reviewed, a repository administrator can apply it explicitly with `GH_TOKEN` set:
+After the local result and policy have been reviewed, a repository administrator can apply it explicitly with `GH_TOKEN` set:
 
 ```bash
 scripts/configure_branch_protection.sh --apply
 ```
 
-The script fails unless it is operating on this exact repository and verifies that the required check was retained. It is not run by CI and never changes repository settings implicitly.
+The policy deliberately has no required hosted status checks. It still enforces protected main, linear history, conversation resolution, and rejects force pushes and branch deletion. The script fails unless it is operating on this exact repository and verifies that hosted status checks remain absent. It is not run by CI and never changes repository settings implicitly.
 
 The supported publisher is local and deliberate. From a clean checkout whose `HEAD` exactly matches canonical protected `main`, first run the non-mutating verification mode:
 

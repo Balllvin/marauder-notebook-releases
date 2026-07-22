@@ -6,7 +6,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPOSITORY="Balllvin/marauder-notebook-releases"
 INTAKE_REPOSITORY="Balllvin/marauder-notebook-release-intake"
-REQUIRED_CHECK="Verify publisher boundary"
 MODE=verify
 
 usage() {
@@ -94,9 +93,8 @@ PROTECTION="$WORK_ROOT/branch-protection.json"
 GH_PROMPT_DISABLED=1 gh api \
   "repos/$REPOSITORY/branches/main/protection" >"$PROTECTION" \
   || die "unable to verify publisher branch protection"
-jq -e --arg required_check "$REQUIRED_CHECK" '
-  .required_status_checks.strict == true and
-  (.required_status_checks.contexts | index($required_check) != null) and
+jq -e '
+  .required_status_checks == null and
   .enforce_admins.enabled == true and
   .required_linear_history.enabled == true and
   .required_conversation_resolution.enabled == true and

@@ -241,7 +241,7 @@ class WorkflowContractTests(unittest.TestCase):
             mode = (REPOSITORY_ROOT / "scripts" / name).stat().st_mode
             self.assertTrue(mode & stat.S_IXUSR, f"{name} must be executable")
 
-    def test_publisher_ci_has_a_tracked_required_check_policy(self) -> None:
+    def test_publisher_ci_is_optional_and_branch_policy_is_local_first(self) -> None:
         ci = (REPOSITORY_ROOT / ".github" / "workflows" / "publisher-ci.yml").read_text(
             encoding="utf-8"
         )
@@ -274,24 +274,15 @@ class WorkflowContractTests(unittest.TestCase):
             "bash -n scripts/*.sh",
             "scripts/verify_openssl.sh",
             "python3 -m unittest discover",
-            "--record-status",
             "--root",
-            'context="$REQUIRED_CHECK"',
             '[[ -z "$(git status --porcelain)" ]]',
-            "require_trusted_policy_checkout",
-            "status recording requires a separate candidate checkout",
-            "trusted publisher policy checkout must be clean",
-            "trusted publisher policy must be exact current origin/main",
-            "trusted publisher policy must match canonical main",
-            "git fetch origin refs/heads/main:refs/remotes/origin/main --prune",
-            "git ls-remote --exit-code",
         ):
             self.assertIn(contract, local_verifier)
+        for forbidden in ("--record-status", "GH_TOKEN", "GITHUB_TOKEN", "gh api"):
+            self.assertNotIn(forbidden, local_verifier)
         for contract in (
             'REPOSITORY="Balllvin/marauder-notebook-releases"',
-            'REQUIRED_CHECK="Verify publisher boundary"',
-            '"strict": true',
-            '"contexts": ["$REQUIRED_CHECK"]',
+            '"required_status_checks": null',
             '"enforce_admins": true',
             '"allow_force_pushes": false',
             '"allow_deletions": false',
@@ -302,26 +293,6 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"required_approving_review_count": 0', bootstrap)
         self.assertIn("--root /path/to/candidate-checkout", readme)
         self.assertIn("scripts/configure_branch_protection.sh --apply", readme)
-
-    def test_local_status_cannot_be_recorded_by_the_candidate_checkout(self) -> None:
-        result = subprocess.run(
-            [
-                str(REPOSITORY_ROOT / "scripts" / "verify_publisher_boundary.sh"),
-                "--root",
-                str(REPOSITORY_ROOT),
-                "--record-status",
-            ],
-            cwd=REPOSITORY_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "status recording requires a separate candidate checkout",
-            result.stderr,
-        )
-        self.assertNotIn("Recorded Verify publisher boundary", result.stdout)
 
     def test_publish_workflow_delegates_the_release_state_machine(self) -> None:
         workflow = self.workflow()
