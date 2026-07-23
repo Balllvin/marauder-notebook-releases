@@ -1,6 +1,6 @@
 # Marauder Notebook downloads
 
-This repository is the public distribution boundary for Marauder Notebook. It contains no application source code and has no write deploy key. Release candidates arrive as inert Git data in a separate Actions-disabled intake repository; only this repository's protected scheduled publisher can turn one into a release.
+This repository is the public distribution boundary for Marauder Notebook. It contains no application source code and has no write deploy key. Release candidates arrive as inert Git data in a separate Actions-disabled intake repository; only the reviewed publisher on this repository's protected `main` can turn one into a release.
 
 ## Download and open
 
@@ -39,28 +39,51 @@ Unsigned, plain ad-hoc, mixed-certificate, Developer ID, wrong-team, wrong-requi
 
 The verifier retains a dormant Developer ID mode for a future, deliberately reviewed policy change. It requires one exact team identifier, Hardened Runtime throughout, a valid notarization ticket, and Gatekeeper acceptance. That path is not enabled or claimed by the current independent policy.
 
-The independent root and release private keys never enter this repository. The offline root is a long-lived release identity and must be backed up securely; CI receives only a rotating leaf key. Release certificates may rotate under that root without changing the root-pinned application identity. Replacing the root is an explicit distribution-identity migration.
+The independent root and release private keys never enter this repository. The offline root is a long-lived release identity and must be backed up securely; an authorized local producer receives only a rotating leaf key. Release certificates may rotate under that root without changing the root-pinned application identity. Replacing the root is an explicit distribution-identity migration.
 
 Independent certificates have no Apple Team Identifier, so Sparkle cannot apply its optional Apple-team policy to XPC client connections and explicitly treats that policy as non-security-critical. The account-free path does not claim that Apple-team check. Update authenticity instead fails closed on the Ed25519-signed feed and archive, and every shipped updater executable is sealed under the pinned Marauder root identity. Enabling the Apple-team policy would require an Apple-issued signing identity.
 
-GitHub immutable releases protect final tags and assets after publication. Every scheduled run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
+GitHub immutable releases protect final tags and assets after publication. Every publisher run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
 
 Every candidate after the first carries the previous published source commit inside its signed provenance. The publisher downloads the latest immutable manifest, verifies both signatures, and requires an exact link before publication. The private producer separately proves that the candidate source descends from that commit. This prevents a higher version number from republishing older source and rejects candidates emitted by historical workflows that lack the signed continuity field.
 
 ## Publisher branch protection
 
-The `main` branch must require the base-anchored `Verify publisher boundary` commit status from `.github/workflows/publisher-ci.yml`. `pull_request_target` keeps the workflow definition on protected `main`; a separate protected-main checkout supplies the checksum-pinned actionlint installer, while the proposed commit is checked out independently and validated with a read-only token and no secrets. A separate no-checkout job receives only `statuses: write` and reports pass or failure on the exact validated pull-request commit, so the required context cannot be satisfied by the base-branch run itself. Push runs report the same context on the protected commit, making the tracked policy bootstrappable immediately after this workflow first lands. The tracked bootstrap prints the complete intended protection policy without changing GitHub by default:
+GitHub-hosted checks are not part of the publisher trust path. Before a publisher change is merged, run the tracked verifier locally against the exact clean candidate checkout:
+
+```bash
+scripts/verify_publisher_boundary.sh \
+  --root /path/to/candidate-checkout
+```
+
+The verifier performs the compile, shell, OpenSSL, actionlint, and complete test-suite checks without GitHub credentials or repository mutations. The optional `.github/workflows/publisher-ci.yml` is a manual mirror for environments that have hosted runners; it is informational and is not required for merging or publication. The tracked bootstrap prints the complete intended branch policy without changing GitHub by default:
 
 ```bash
 scripts/configure_branch_protection.sh
 ```
 
-After the publisher CI workflow has run at least once and the policy has been reviewed, a repository administrator can apply it explicitly with `GH_TOKEN` set:
+After the local result and policy have been reviewed, a repository administrator can apply it explicitly with `GH_TOKEN` set:
 
 ```bash
 scripts/configure_branch_protection.sh --apply
 ```
 
-The script fails unless it is operating on this exact repository and verifies that the required check was retained. It is not run by CI and never changes repository settings implicitly.
+The policy deliberately has no required hosted status checks. It still enforces protected main, linear history, conversation resolution, and rejects force pushes and branch deletion. The script fails unless it is operating on this exact repository and verifies that hosted status checks remain absent. It is not run by CI and never changes repository settings implicitly.
 
-The five-minute schedule remains the normal publisher trigger. If GitHub disables scheduled workflows after inactivity or the source repository has not provisioned its narrow wake token, a repository administrator can manually dispatch `Notebook release publisher` on `main`. The workflow rejects every other ref, checks out `main` explicitly, and proves it is running the current protected commit before touching intake. Automatic cross-repository re-enabling still requires a fine-grained token with Actions read/write access to this repository; GitHub provides no secure tokenless cross-repository wake mechanism.
+The supported publisher is local and deliberate. From a clean checkout whose `HEAD` exactly matches canonical protected `main`, first run the non-mutating verification mode:
+
+```bash
+scripts/publish_local.sh --verify
+```
+
+When a locked intake is ready, publish it explicitly:
+
+```bash
+scripts/publish_local.sh --publish
+```
+
+The command requires macOS, authenticated `gh` access scoped to this release repository, the required protected-main policy, and GitHub immutable releases. It never reads source-signing keys or the intake deploy key. It selects and extracts intake data in a temporary repository, verifies the archive before expansion, verifies the complete app identity, checks signed source continuity and monotonic version/build history, byte-compares every uploaded asset, and verifies the final release and asset attestations. Verification is the default; only `--publish` may create a draft or release.
+
+GitHub Actions remains an optional manually dispatched mirror that calls this exact script. It is not required for local publication and does not own a second release implementation.
+
+An intake is eligible only when its versioned branch points to the same commit as `publication-lock/notebook`; unlocked publication branches fail closed. The producer creates or moves the branch and lock atomically and cannot move a locked candidate until its signed manifest is published byte-for-byte. The publisher reads both refs in one snapshot before work and again immediately before publication.

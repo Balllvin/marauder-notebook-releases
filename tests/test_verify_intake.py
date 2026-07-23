@@ -66,8 +66,9 @@ class VerifyIntakeTests(unittest.TestCase):
         feed_content = (
             '<?xml version="1.0" encoding="utf-8"?>\n'
             f'<rss xmlns:sparkle="{verify_intake.SPARKLE_NAMESPACE}" version="2.0"><channel><item>'
+            f'<sparkle:version>{build_number}</sparkle:version>'
+            f'<sparkle:shortVersionString>{version}</sparkle:shortVersionString>'
             f'<enclosure url="{archive_url}" length="{archive.stat().st_size}" '
-            f'sparkle:shortVersionString="{version}" sparkle:version="{build_number}" '
             f'sparkle:edSignature="{archive_signature}" />'
             '</item></channel></rss>\n'
         ).encode("utf-8")
@@ -115,6 +116,30 @@ class VerifyIntakeTests(unittest.TestCase):
         }
         (intake / "update-feed.json").write_text(json.dumps(trust), encoding="utf-8")
         return intake, f"publication/{version}-{build_number}-{source_commit}"
+
+    def test_rejects_conflicting_item_and_enclosure_versions(self) -> None:
+        intake, branch = self.make_intake()
+        appcast = intake / "appcast.xml"
+        payload = appcast.read_text(encoding="utf-8").replace(
+            '<enclosure url=',
+            '<enclosure sparkle:version="43" url=',
+            1,
+        )
+        unsigned, _separator, _signature = payload.partition("<!-- sparkle-signatures:")
+        unsigned_path = self.root / "conflicting-appcast.xml"
+        unsigned_path.write_text(unsigned, encoding="utf-8")
+        feed_signature = self.sign(unsigned_path)
+        appcast.write_text(
+            unsigned
+            + f"<!-- sparkle-signatures:\nedSignature: {feed_signature}\nlength: {len(unsigned.encode('utf-8'))}\n-->\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            verify_intake.IntakeError,
+            "conflicting Sparkle version values",
+        ):
+            self.validate(intake, branch)
 
     def write_signed_metadata(self, path: Path, metadata: dict[str, object]) -> None:
         unsigned = dict(metadata)

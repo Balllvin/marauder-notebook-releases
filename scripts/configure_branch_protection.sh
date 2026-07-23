@@ -4,7 +4,6 @@ set -euo pipefail
 
 REPOSITORY="Balllvin/marauder-notebook-releases"
 BRANCH="main"
-REQUIRED_CHECK="Verify publisher boundary"
 APPLY=false
 
 usage() {
@@ -28,10 +27,7 @@ trap cleanup EXIT
 
 cat >"$POLICY_FILE" <<JSON
 {
-  "required_status_checks": {
-    "strict": true,
-    "contexts": ["$REQUIRED_CHECK"]
-  },
+  "required_status_checks": null,
   "enforce_admins": true,
   "required_pull_request_reviews": {
     "dismiss_stale_reviews": true,
@@ -68,9 +64,9 @@ gh api \
 
 ACTUAL_CHECKS="$(gh api \
   "repos/$REPOSITORY/branches/$BRANCH/protection" \
-  --jq '.required_status_checks.contexts | sort | join("\n")')"
-[[ "$ACTUAL_CHECKS" == "$REQUIRED_CHECK" ]] || {
-  echo "Branch protection did not retain the exact required publisher check." >&2
+  --jq '.required_status_checks == null')"
+[[ "$ACTUAL_CHECKS" == "true" ]] || {
+  echo "Branch protection unexpectedly retained hosted status checks." >&2
   exit 1
 }
-echo "Protected $REPOSITORY/$BRANCH with required check: $REQUIRED_CHECK"
+echo "Protected $REPOSITORY/$BRANCH for locally verified publication."

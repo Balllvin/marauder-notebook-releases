@@ -19,7 +19,7 @@ from typing import Any
 RELEASE_REPOSITORY = "Balllvin/marauder-notebook-releases"
 SOURCE_REPOSITORY = "Balllvin/marauder"
 PRODUCT_NAME = "Marauder Notebook"
-PUBLIC_ED_KEY = "Pp68s3Yv758+APzr4aMwpJNcXbOdJqkrMjS/7+i0LY0="
+PUBLIC_ED_KEY = "tWzGidYf3K08nkhu45CwWt/uJWERB+MT+UrpYjy4OXU="
 RELEASE_ROOT = f"https://github.com/{RELEASE_REPOSITORY}/releases"
 FEED_URL = f"{RELEASE_ROOT}/latest/download/appcast.xml"
 DOWNLOAD_URL_PREFIX = f"{RELEASE_ROOT}/download"
@@ -255,13 +255,33 @@ def _validate_appcast(
     if len(enclosures) != 1:
         raise IntakeError("appcast.xml must contain exactly one release enclosure")
     enclosure = enclosures[0]
+    containing_items = [
+        item for item in root.findall(".//item") if enclosure in item.findall("enclosure")
+    ]
+    if len(containing_items) != 1:
+        raise IntakeError("appcast enclosure must belong to exactly one update item")
+    item = containing_items[0]
+
+    def version_value(name: str) -> str | None:
+        qualified_name = f"{{{SPARKLE_NAMESPACE}}}{name}"
+        attribute_value = enclosure.get(qualified_name)
+        elements = item.findall(qualified_name)
+        if len(elements) > 1:
+            raise IntakeError(f"appcast item has duplicate Sparkle {name} values")
+        element_value = None
+        if elements:
+            element_value = (elements[0].text or "").strip() or None
+        if attribute_value and element_value and attribute_value != element_value:
+            raise IntakeError(f"appcast has conflicting Sparkle {name} values")
+        return attribute_value or element_value
+
     if enclosure.get("url") != archive_url:
         raise IntakeError("appcast enclosure does not use the immutable archive URL")
     if enclosure.get("length") != str(archive.stat().st_size):
         raise IntakeError("appcast enclosure length does not match the archive")
-    if enclosure.get(f"{{{SPARKLE_NAMESPACE}}}shortVersionString") != version:
+    if version_value("shortVersionString") != version:
         raise IntakeError("appcast version does not match release metadata")
-    if enclosure.get(f"{{{SPARKLE_NAMESPACE}}}version") != build_number:
+    if version_value("version") != build_number:
         raise IntakeError("appcast build number does not match release metadata")
     if enclosure.get(f"{{{SPARKLE_NAMESPACE}}}edSignature") != archive_signature:
         raise IntakeError("appcast archive signature does not match release metadata")

@@ -14,18 +14,16 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 try:
-    from . import verify_intake
+    from . import intake_selection, verify_intake
 except ImportError:
+    import intake_selection
     import verify_intake
 
 
 INTAKE_REPOSITORY = "Balllvin/marauder-notebook-release-intake"
-COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-BRANCH_PATTERN = re.compile(
-    r"publication/"
-    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-"
-    r"([1-9][0-9]*)-([0-9a-f]{40})"
-)
+PUBLICATION_LOCK_REF = intake_selection.PUBLICATION_LOCK_REF
+COMMIT_PATTERN = intake_selection.COMMIT_PATTERN
+BRANCH_PATTERN = intake_selection.BRANCH_PATTERN
 
 
 class PreparationError(ValueError):
@@ -71,93 +69,10 @@ def _flatten_pages(payload: object, label: str) -> list[object]:
 
 
 def _select_pending_intake(refs: list[object], releases: list[object]) -> dict[str, object]:
-    published_tags: set[str] = set()
-    published_identities: list[tuple[tuple[int, int, int], int]] = []
-    for release in releases:
-        if not isinstance(release, dict):
-            raise PreparationError("release list contains a non-object")
-        if release.get("draft") is True:
-            continue
-        if release.get("prerelease") is True:
-            raise PreparationError("the release repository cannot contain prereleases")
-        tag = release.get("tag_name")
-        if not isinstance(tag, str) or verify_intake.RELEASE_TAG.fullmatch(tag) is None:
-            raise PreparationError("the dedicated repository contains a non-Notebook release")
-        published_tags.add(tag)
-        match = verify_intake.RELEASE_TAG.fullmatch(tag)
-        assert match is not None
-        published_identities.append(
-            (tuple(int(part) for part in match.groups()[:3]), int(match.group(4)))
-        )
-
-    highest_version = max((identity[0] for identity in published_identities), default=(0, 0, 0))
-    highest_build = max((identity[1] for identity in published_identities), default=0)
-    candidates_by_identity: dict[
-        tuple[tuple[int, int, int], int],
-        list[tuple[tuple[int, int, int], int, str, str]],
-    ] = {}
-    seen_branches: set[str] = set()
-    ignored_ref_count = 0
-    for ref_payload in refs:
-        if not isinstance(ref_payload, dict):
-            ignored_ref_count += 1
-            continue
-        ref = ref_payload.get("ref")
-        target = ref_payload.get("object")
-        if not isinstance(ref, str) or not ref.startswith("refs/heads/") or not isinstance(target, dict):
-            ignored_ref_count += 1
-            continue
-        branch = ref.removeprefix("refs/heads/")
-        match = BRANCH_PATTERN.fullmatch(branch)
-        commit = target.get("sha")
-        if match is None or target.get("type") != "commit" or not isinstance(commit, str) or COMMIT_PATTERN.fullmatch(commit) is None:
-            ignored_ref_count += 1
-            continue
-        if branch in seen_branches:
-            continue
-        seen_branches.add(branch)
-        version = tuple(int(part) for part in match.groups()[:3])
-        if version == (0, 0, 0):
-            ignored_ref_count += 1
-            continue
-        build = int(match.group(4))
-        tag = f"notebook-v{'.'.join(str(part) for part in version)}-{build}"
-        if tag in published_tags:
-            continue
-        if version <= highest_version or build <= highest_build:
-            ignored_ref_count += 1
-            continue
-        identity = (version, build)
-        candidates_by_identity.setdefault(identity, []).append(
-            (version, build, branch, commit)
-        )
-
-    candidates: list[tuple[tuple[int, int, int], int, str, str]] = []
-    for identity_candidates in candidates_by_identity.values():
-        if len(identity_candidates) == 1:
-            candidates.extend(identity_candidates)
-        else:
-            ignored_ref_count += len(identity_candidates)
-
-    candidates.sort()
-    prepared_candidates = [
-        {"branch": branch, "commit": commit}
-        for _version, _build, branch, commit in candidates
-    ]
-    if not prepared_candidates:
-        return {
-            "available": False,
-            "candidates": [],
-            "ignored_ref_count": ignored_ref_count,
-        }
-    first = prepared_candidates[0]
-    return {
-        "available": True,
-        "branch": first["branch"],
-        "commit": first["commit"],
-        "candidates": prepared_candidates,
-        "ignored_ref_count": ignored_ref_count,
-    }
+    try:
+        return intake_selection.select_pending_intake(refs, releases)
+    except intake_selection.SelectionError as error:
+        raise PreparationError(str(error)) from error
 
 
 def select_pending_intake(refs_path: Path, releases_path: Path) -> dict[str, object]:
@@ -171,7 +86,14 @@ def discover_pending_intake(repository_url: str, releases_path: Path) -> dict[st
         raise PreparationError("intake repository URL must be a fixed public GitHub clone URL")
     try:
         result = subprocess.run(
-            ["git", "ls-remote", "--heads", repository_url, "refs/heads/publication/*"],
+            [
+                "git",
+                "ls-remote",
+                "--heads",
+                repository_url,
+                "refs/heads/publication/*",
+                PUBLICATION_LOCK_REF,
+            ],
             check=False,
             capture_output=True,
         )
@@ -358,6 +280,18 @@ def prepare_pending_intake(
     candidates = selection.get("candidates")
     if not isinstance(candidates, list):
         raise PreparationError("intake selection has no candidate list")
+    publication_lock_commit = selection.get("publication_lock_commit")
+    if publication_lock_commit != "none" and (
+        not isinstance(publication_lock_commit, str)
+        or COMMIT_PATTERN.fullmatch(publication_lock_commit) is None
+    ):
+        raise PreparationError("intake selection has an invalid publication lock")
+    if publication_lock_commit != "none" and any(
+        not isinstance(candidate, dict)
+        or candidate.get("commit") != publication_lock_commit
+        for candidate in candidates
+    ):
+        raise PreparationError("locked intake selection contains a different candidate")
     if selection["available"] is False:
         if candidates:
             raise PreparationError("unavailable intake selection cannot contain candidates")
@@ -365,7 +299,10 @@ def prepare_pending_intake(
             "available": False,
             "invalid_candidate_count": 0,
             "invalid_candidates": [],
+            "publication_lock_commit": publication_lock_commit,
         }
+    if publication_lock_commit == "none":
+        raise PreparationError("available intake selection requires a publication lock")
     if not candidates:
         raise PreparationError("available intake selection has no candidates")
     if output.exists() or output.is_symlink():
@@ -400,6 +337,7 @@ def prepare_pending_intake(
             result["available"] = True
             result["invalid_candidate_count"] = len(invalid)
             result["invalid_candidates"] = invalid
+            result["publication_lock_commit"] = publication_lock_commit
             return result
     raise PreparationError(
         f"all {len(invalid)} pending intake candidates failed verification"
