@@ -26,4 +26,5 @@ jobs:
       - name: Run the reviewed publisher
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOTEBOOK_EXPECTED_TEAM_IDENTIFIER: ${{ vars.NOTEBOOK_EXPECTED_TEAM_IDENTIFIER }}
         run: scripts/publish_local.sh --publish

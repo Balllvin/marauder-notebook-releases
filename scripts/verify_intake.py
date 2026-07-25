@@ -3,17 +3,23 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import hashlib
 import json
 import re
-import subprocess
 import sys
 import tempfile
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+
+from scripts.intake_errors import IntakeError
+from scripts.intake_signing import (
+    SPARKLE_NAMESPACE,
+    canonical_public_key as _canonical_public_key,
+    canonical_signature as _canonical_signature,
+    require_regular_file as _require_regular_file,
+    validate_appcast as _validate_appcast,
+    verify_ed25519 as _verify_ed25519,
+)
 
 
 RELEASE_REPOSITORY = "Balllvin/marauder-notebook-releases"
@@ -24,19 +30,16 @@ RELEASE_ROOT = f"https://github.com/{RELEASE_REPOSITORY}/releases"
 FEED_URL = f"{RELEASE_ROOT}/latest/download/appcast.xml"
 DOWNLOAD_URL_PREFIX = f"{RELEASE_ROOT}/download"
 METADATA_URL = f"{RELEASE_ROOT}/latest/download/notebook-release.json"
-SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 SEMANTIC_VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 BUILD_NUMBER = re.compile(r"[1-9][0-9]*")
 SOURCE_COMMIT = re.compile(r"[0-9a-f]{40}")
 RELEASE_TAG = re.compile(r"notebook-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([1-9][0-9]*)")
-FEED_SIGNATURE_BLOCK = re.compile(
-    rb"<!-- sparkle-signatures:\nedSignature: ([A-Za-z0-9+/]+={0,2})\nlength: ([1-9][0-9]*)\n-->\n\Z"
-)
-ED25519_SUBJECT_PUBLIC_KEY_PREFIX = bytes.fromhex("302a300506032b6570032100")
-
-
-class IntakeError(ValueError):
-    pass
+SIGNED_DISTRIBUTION = {
+    "code_signature": "Developer ID Application",
+    "notarization": "accepted",
+    "ticket": "stapled",
+    "gatekeeper": "accepted",
+}
 
 
 def _without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -62,78 +65,9 @@ def _read_json(path: Path, maximum_bytes: int) -> dict[str, Any]:
     return payload
 
 
-def _require_regular_file(path: Path, maximum_bytes: int | None = None) -> None:
-    if path.is_symlink() or not path.is_file():
-        raise IntakeError(f"{path.name} must be a regular file")
-    if maximum_bytes is not None and path.stat().st_size > maximum_bytes:
-        raise IntakeError(f"{path.name} exceeds its size limit")
-
-
 def _require_exact_keys(payload: dict[str, Any], expected: set[str], label: str) -> None:
     if set(payload) != expected:
         raise IntakeError(f"{label} has unexpected or missing fields")
-
-
-def _canonical_signature(value: object, label: str) -> bytes:
-    if not isinstance(value, str) or not value:
-        raise IntakeError(f"{label} is missing")
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as error:
-        raise IntakeError(f"{label} is not canonical base64") from error
-    if len(decoded) != 64 or base64.b64encode(decoded).decode("ascii") != value:
-        raise IntakeError(f"{label} must be one canonical Ed25519 signature")
-    return decoded
-
-
-def _canonical_public_key(value: str) -> bytes:
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except (ValueError, binascii.Error) as error:
-        raise IntakeError("the committed Sparkle public key is invalid") from error
-    if len(decoded) != 32 or base64.b64encode(decoded).decode("ascii") != value:
-        raise IntakeError("the committed Sparkle public key is invalid")
-    return decoded
-
-
-def _verify_ed25519(
-    input_path: Path,
-    signature: bytes,
-    public_key: bytes,
-    openssl: str,
-) -> None:
-    with tempfile.TemporaryDirectory(prefix="notebook-intake-signature-") as directory:
-        root = Path(directory)
-        key_path = root / "public.der"
-        signature_path = root / "signature.bin"
-        key_path.write_bytes(ED25519_SUBJECT_PUBLIC_KEY_PREFIX + public_key)
-        signature_path.write_bytes(signature)
-        try:
-            result = subprocess.run(
-                [
-                    openssl,
-                    "pkeyutl",
-                    "-verify",
-                    "-pubin",
-                    "-inkey",
-                    str(key_path),
-                    "-keyform",
-                    "DER",
-                    "-rawin",
-                    "-in",
-                    str(input_path),
-                    "-sigfile",
-                    str(signature_path),
-                ],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-        except OSError as error:
-            raise IntakeError(f"unable to run the Ed25519 verifier: {error}") from error
-        if result.returncode != 0:
-            raise IntakeError(f"Ed25519 signature verification failed for {input_path.name}")
 
 
 def _release_identity(version: str, build_number: str) -> tuple[tuple[int, int, int], int]:
@@ -200,6 +134,13 @@ def _verify_provenance(
         payload_path.unlink(missing_ok=True)
 
 
+def _validate_signed_distribution(metadata: dict[str, Any]) -> None:
+    if metadata.get("signed_distribution") != SIGNED_DISTRIBUTION:
+        raise IntakeError(
+            "release metadata lacks the exact Developer ID distribution attestation"
+        )
+
+
 def _validate_checksum(archive: Path, checksum: Path, expected_digest: object) -> str:
     _require_regular_file(checksum, 1024)
     if not isinstance(expected_digest, str) or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None:
@@ -221,97 +162,33 @@ def _validate_checksum(archive: Path, checksum: Path, expected_digest: object) -
     return actual
 
 
-def _validate_appcast(
-    path: Path,
-    *,
-    archive: Path,
-    archive_url: str,
-    archive_signature: str,
-    version: str,
-    build_number: str,
-    public_key: bytes,
-    openssl: str,
-) -> None:
-    _require_regular_file(path, 1024 * 1024)
-    payload = path.read_bytes()
-    if re.search(rb"<!\s*(DOCTYPE|ENTITY)", payload, re.IGNORECASE):
-        raise IntakeError("appcast.xml cannot contain document type or entity declarations")
-    signature_match = FEED_SIGNATURE_BLOCK.search(payload)
-    if signature_match is None:
-        raise IntakeError("appcast.xml has no valid signed-feed block")
-    feed_signature = _canonical_signature(
-        signature_match.group(1).decode("ascii"),
-        "appcast feed signature",
-    )
-    signed_length = int(signature_match.group(2))
-    if signed_length != signature_match.start():
-        raise IntakeError("appcast signed length does not match its signed content")
-
-    try:
-        root = ET.fromstring(payload)
-    except ET.ParseError as error:
-        raise IntakeError(f"appcast.xml is not valid XML: {error}") from error
-    enclosures = root.findall(".//enclosure")
-    if len(enclosures) != 1:
-        raise IntakeError("appcast.xml must contain exactly one release enclosure")
-    enclosure = enclosures[0]
-    containing_items = [
-        item for item in root.findall(".//item") if enclosure in item.findall("enclosure")
-    ]
-    if len(containing_items) != 1:
-        raise IntakeError("appcast enclosure must belong to exactly one update item")
-    item = containing_items[0]
-
-    def version_value(name: str) -> str | None:
-        qualified_name = f"{{{SPARKLE_NAMESPACE}}}{name}"
-        attribute_value = enclosure.get(qualified_name)
-        elements = item.findall(qualified_name)
-        if len(elements) > 1:
-            raise IntakeError(f"appcast item has duplicate Sparkle {name} values")
-        element_value = None
-        if elements:
-            element_value = (elements[0].text or "").strip() or None
-        if attribute_value and element_value and attribute_value != element_value:
-            raise IntakeError(f"appcast has conflicting Sparkle {name} values")
-        return attribute_value or element_value
-
-    if enclosure.get("url") != archive_url:
-        raise IntakeError("appcast enclosure does not use the immutable archive URL")
-    if enclosure.get("length") != str(archive.stat().st_size):
-        raise IntakeError("appcast enclosure length does not match the archive")
-    if version_value("shortVersionString") != version:
-        raise IntakeError("appcast version does not match release metadata")
-    if version_value("version") != build_number:
-        raise IntakeError("appcast build number does not match release metadata")
-    if enclosure.get(f"{{{SPARKLE_NAMESPACE}}}edSignature") != archive_signature:
-        raise IntakeError("appcast archive signature does not match release metadata")
-
-    with tempfile.NamedTemporaryFile(prefix="notebook-appcast-content-", delete=False) as signed_file:
-        signed_path = Path(signed_file.name)
-        signed_file.write(payload[:signed_length])
-    try:
-        _verify_ed25519(signed_path, feed_signature, public_key, openssl)
-    finally:
-        signed_path.unlink(missing_ok=True)
-
-
 def validate_intake(
     intake: Path,
     branch: str,
     *,
     public_key: str = PUBLIC_ED_KEY,
     openssl: str = "openssl",
+    allow_legacy_published: bool = False,
 ) -> dict[str, str]:
     if intake.is_symlink() or not intake.is_dir():
         raise IntakeError("intake must be a real directory")
     metadata_path = intake / "notebook-release.json"
     metadata = _read_json(metadata_path, 32 * 1024)
-    _require_exact_keys(
-        metadata,
-        {"schema", "product", "version", "build_number", "tag", "architecture", "source", "asset", "checksum", "appcast", "provenance"},
-        "notebook-release.json",
-    )
-    if metadata["schema"] != 1 or metadata["product"] != PRODUCT_NAME:
+    common_keys = {
+        "schema", "product", "version", "build_number", "tag", "architecture",
+        "source", "asset", "checksum", "appcast", "provenance",
+    }
+    schema = metadata.get("schema")
+    if schema == 2:
+        _require_exact_keys(metadata, common_keys | {"signed_distribution"}, "notebook-release.json")
+        _validate_signed_distribution(metadata)
+        distribution_mode = "developer-id"
+    elif schema == 1 and allow_legacy_published:
+        _require_exact_keys(metadata, common_keys, "notebook-release.json")
+        distribution_mode = "independent"
+    else:
+        raise IntakeError("release metadata has the wrong schema or product")
+    if metadata["product"] != PRODUCT_NAME:
         raise IntakeError("release metadata has the wrong schema or product")
     raw_public_key = _canonical_public_key(public_key)
     _verify_provenance(metadata, raw_public_key, openssl)
@@ -402,6 +279,7 @@ def validate_intake(
         "source_commit": source_commit,
         "previous_source_commit": previous_source_commit,
         "branch": expected_branch,
+        "distribution_mode": distribution_mode,
     }
 
 
@@ -450,27 +328,28 @@ def _verified_source_identity(
     *,
     public_key: str,
     openssl: str,
+    allow_legacy_published: bool = False,
 ) -> tuple[str, str | None]:
     metadata = _read_json(manifest_path, 32 * 1024)
+    schema = metadata.get("schema")
+    common_keys = {
+        "schema", "product", "version", "build_number", "tag", "architecture",
+        "source", "asset", "checksum", "appcast", "provenance",
+    }
+    expected_keys = (
+        common_keys
+        if schema == 1 and allow_legacy_published
+        else common_keys | {"signed_distribution"}
+    )
     _require_exact_keys(
         metadata,
-        {
-            "schema",
-            "product",
-            "version",
-            "build_number",
-            "tag",
-            "architecture",
-            "source",
-            "asset",
-            "checksum",
-            "appcast",
-            "provenance",
-        },
+        expected_keys,
         "notebook-release.json",
     )
-    if metadata["schema"] != 1 or metadata["product"] != PRODUCT_NAME:
+    if schema not in ({1, 2} if allow_legacy_published else {2}) or metadata["product"] != PRODUCT_NAME:
         raise IntakeError("release metadata has the wrong schema or product")
+    if schema == 2:
+        _validate_signed_distribution(metadata)
     _verify_provenance(metadata, _canonical_public_key(public_key), openssl)
     source = metadata["source"]
     if not isinstance(source, dict):
@@ -516,6 +395,7 @@ def assert_source_link(
         previous_manifest_path,
         public_key=public_key,
         openssl=openssl,
+        allow_legacy_published=True,
     )
     if candidate_previous_commit != previous_commit:
         raise IntakeError(
@@ -531,6 +411,7 @@ def parser() -> argparse.ArgumentParser:
     validate.add_argument("--branch", required=True)
     validate.add_argument("--result", required=True, type=Path)
     validate.add_argument("--openssl", default="openssl")
+    validate.add_argument("--allow-legacy-published", action="store_true")
     newer = subparsers.add_parser("assert-newer")
     newer.add_argument("--manifest", required=True, type=Path)
     newer.add_argument("--releases", required=True, type=Path)
@@ -549,6 +430,7 @@ def main() -> int:
                 arguments.intake,
                 arguments.branch,
                 openssl=arguments.openssl,
+                allow_legacy_published=arguments.allow_legacy_published,
             )
             arguments.result.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
         elif arguments.command == "assert-newer":

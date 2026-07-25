@@ -110,8 +110,11 @@ jq -e '
 
 export GITHUB_REPOSITORY="$REPOSITORY"
 export RUNNER_TEMP="$WORK_ROOT"
-export NOTEBOOK_DISTRIBUTION_MODE=independent
-export NOTEBOOK_EXPECTED_TEAM_IDENTIFIER=""
+export NOTEBOOK_DISTRIBUTION_MODE=developer-id
+NOTEBOOK_EXPECTED_TEAM_IDENTIFIER="${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}"
+[[ "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]] \
+  || die "NOTEBOOK_EXPECTED_TEAM_IDENTIFIER must be one 10-character Apple Team ID"
+export NOTEBOOK_EXPECTED_TEAM_IDENTIFIER
 
 scripts/verify_openssl.sh >/dev/null
 scripts/audit_latest_release.sh
@@ -190,7 +193,10 @@ python3 scripts/verify_app_bundle.py \
   --app "$APP" \
   --release-version "$RELEASE_VERSION" \
   --build-number "$BUILD_NUMBER" \
-  --distribution-mode independent
+  --distribution-mode developer-id \
+  --expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"
+/usr/bin/xcrun stapler validate "$APP"
+/usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
 
 CURRENT_INTAKE_REF="$(git ls-remote --exit-code --heads \
   "https://github.com/$INTAKE_REPOSITORY.git" \
@@ -248,7 +254,7 @@ python3 scripts/publish_release.py \
   --publication-lock-commit "$PUBLICATION_LOCK_COMMIT" \
   --intake "$VERIFIED_INTAKE" \
   --work "$WORK_ROOT/publish-state" \
-  --distribution-mode independent
+  --distribution-mode developer-id
 
 scripts/audit_latest_release.sh
-echo "Published and independently reverified $RELEASE_TAG."
+echo "Published and Gatekeeper-reverified $RELEASE_TAG."

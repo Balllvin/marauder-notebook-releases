@@ -61,16 +61,16 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "false\n")
 
-    def test_default_publisher_requires_no_apple_credentials(self) -> None:
+    def test_public_publisher_requires_the_exact_gatekeeper_contract(self) -> None:
         contract = self.workflow() + self.publisher()
-        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=independent", contract)
-        self.assertIn('export NOTEBOOK_EXPECTED_TEAM_IDENTIFIER=""', contract)
+        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=developer-id", contract)
+        self.assertIn("NOTEBOOK_EXPECTED_TEAM_IDENTIFIER", contract)
+        self.assertIn("^[A-Z0-9]{10}$", contract)
         self.assertIn("scripts/verify_app_bundle.py", contract)
-        self.assertIn("--distribution-mode independent", contract)
-        self.assertNotIn("secrets.APPLE", contract)
-        self.assertNotIn("notarytool", contract)
-        self.assertNotIn("security import", contract)
-        self.assertNotIn("Contents/MacOS/MarauderNotebook", contract)
+        self.assertIn("--distribution-mode developer-id", contract)
+        self.assertIn("--expected-team-identifier", contract)
+        self.assertIn("xcrun stapler validate", contract)
+        self.assertIn("spctl --assess --type execute", contract)
 
     def test_publication_keeps_all_distribution_gates_before_publish(self) -> None:
         workflow = self.publisher()
@@ -87,7 +87,7 @@ class WorkflowContractTests(unittest.TestCase):
             "--previous-manifest",
             "scripts/verify_release_archive.py",
             "scripts/verify_app_bundle.py",
-            "export NOTEBOOK_DISTRIBUTION_MODE=independent",
+            "export NOTEBOOK_DISTRIBUTION_MODE=developer-id",
         ):
             self.assertIn(contract, workflow)
         for contract in (
@@ -105,6 +105,14 @@ class WorkflowContractTests(unittest.TestCase):
         )
         self.assertLess(
             workflow.index("scripts/verify_app_bundle.py"),
+            workflow.index("scripts/publish_release.py"),
+        )
+        self.assertLess(
+            workflow.index("xcrun stapler validate"),
+            workflow.index("scripts/publish_release.py"),
+        )
+        self.assertLess(
+            workflow.index("spctl --assess --type execute"),
             workflow.index("scripts/publish_release.py"),
         )
         verifier = "\n".join(
@@ -127,38 +135,36 @@ class WorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(contract, verifier)
 
-    def test_local_publication_is_fixed_to_independent_signing(self) -> None:
+    def test_local_publication_is_fixed_to_developer_id_distribution(self) -> None:
         workflow = self.publisher()
-        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=independent", workflow)
-        self.assertIn("--distribution-mode independent", workflow)
-        self.assertNotIn("developer-id", workflow)
+        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=developer-id", workflow)
+        self.assertEqual(workflow.count("--distribution-mode developer-id"), 2)
+        self.assertNotIn("--distribution-mode independent", workflow)
         self.assertIn(
-            'cfg.distribution_mode == "developer-id"',
+            'arguments.distribution_mode != "developer-id"',
             (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
                 encoding="utf-8"
             ),
         )
 
-    def test_user_copy_is_honest_about_the_one_time_gatekeeper_choice(self) -> None:
+    def test_user_copy_requires_an_ordinary_gatekeeper_accepted_release(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         for contract in (
-            "Neither downloading nor using the app requires an Apple account",
-            "Control-click",
-            "Privacy & Security",
-            "Open Anyway",
-            "Xcode",
-            "terminal commands",
-            "Sparkle Ed25519 archive signature",
+            "Developer ID signed",
+            "Apple notarization",
+            "stapled",
+            "accepted by Gatekeeper",
+            "must never need to bypass macOS security",
         ):
             self.assertIn(contract, readme)
-        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=independent", self.publisher())
         self.assertIn(
-            "Independently signed universal macOS application",
+            "Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted",
             (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
                 encoding="utf-8"
             ),
         )
-        self.assertNotIn("Keychain", readme)
+        self.assertNotIn("Open Anyway", readme)
+        self.assertNotIn("Control-click", readme)
 
     def test_partial_drafts_are_repaired_before_exact_byte_publication(self) -> None:
         workflow = self.publisher()
@@ -226,7 +232,9 @@ class WorkflowContractTests(unittest.TestCase):
             audit.index("verify_release_archive.py"),
             audit.index("/usr/bin/ditto -x -k"),
         )
-        self.assertIn('${NOTEBOOK_DISTRIBUTION_MODE:-independent}', audit)
+        self.assertIn("--allow-legacy-published", audit)
+        self.assertIn("RELEASE_DISTRIBUTION_MODE", audit)
+        self.assertIn("historical input only", audit)
 
     def test_workflow_executes_only_executable_verifier_scripts(self) -> None:
         for name in (

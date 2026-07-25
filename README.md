@@ -4,44 +4,30 @@ This repository is the public distribution boundary for Marauder Notebook. It co
 
 ## Download and open
 
-Download the current app from [Releases](https://github.com/Balllvin/marauder-notebook-releases/releases/latest), move **Marauder Notebook** to Applications, and open it. Neither downloading nor using the app requires an Apple account, an Apple Developer membership, Xcode, or terminal commands.
-
-The independent build is signed under Marauder's pinned non-Apple private certificate authority, so updates keep one stable, certificate-bound app identity without requiring Apple membership. Because Apple has not notarized this independent build, macOS cannot associate the first launch with an Apple-registered developer. If macOS blocks it:
-
-1. In Finder, Control-click **Marauder Notebook** and choose **Open**, then confirm **Open**; or
-2. Open **System Settings → Privacy & Security**, find the blocked-app message, choose **Open Anyway**, and confirm.
-
-This is a one-time choice for that app. Marauder sign-in is the only product account flow. Later updates are installed by the app from the signed update feed.
+Download the current app from [Releases](https://github.com/Balllvin/marauder-notebook-releases/releases/latest), move **Marauder Notebook** to Applications, and open it. Publication is blocked unless the archive is Developer ID signed, accepted by Apple notarization, stapled with that ticket, and accepted by Gatekeeper. Users must never need to bypass macOS security or clear quarantine to open an ordinary public release. Marauder sign-in is the only product account flow. Later updates are installed by the app from the signed update feed.
 
 ## Release integrity
 
 Every published release includes:
 
-- the independently signed universal macOS app archive;
+- the Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted universal macOS app archive;
 - its SHA-256 checksum;
 - the Sparkle update feed;
 - immutable release provenance; and
 - the committed update-trust manifest.
 
-The default publishing policy requires no Apple credentials. Before publication it verifies that:
+The publishing policy requires one configured Apple Team ID. Before publication it verifies that:
 
-- the main app and every nested Mach-O are signed by one release certificate under the pinned Marauder private-CA root with no Apple team identifier;
-- every Mach-O carries its exact identifier-and-root-bound designated requirement;
-- every executable retains Hardened Runtime; the main app has only the narrow library-validation exception required to load Sparkle without an Apple-issued identity;
-- independent signatures do not depend on Apple timestamp services, and every nested executable has exactly the producer-approved entitlement set;
+- the main app and every nested Mach-O are signed by the same Developer ID Application certificate for the configured Apple Team ID;
+- every executable retains Hardened Runtime and every nested executable has exactly the producer-approved entitlement set;
+- Apple's stapler validates the notarization ticket and `spctl` accepts the expanded app before publication;
 - the app, every nested executable, and every framework are universal `arm64` and `x86_64` code;
 - the exact bundle identity, version, build, update key, feed URL, deep link, sandbox, file, network, and microphone entitlements match the protected contract;
 - the archive checksum, Sparkle Ed25519 archive signature, signed appcast, and signed provenance all validate against the committed public key;
 - the intake contains exactly the five approved immutable files, points to an exact Marauder source commit, and links to the source commit in the latest signed immutable release; and
 - the version and build number are newer than every published release.
 
-Unsigned, plain ad-hoc, mixed-certificate, Developer ID, wrong-team, wrong-requirement, tampered, unsealed, thin, relabeled, malformed, mutable, or incompletely signed candidates fail closed. The Ed25519 signing key remains mandatory: the publisher never releases an unsigned archive or update feed.
-
-The verifier retains a dormant Developer ID mode for a future, deliberately reviewed policy change. It requires one exact team identifier, Hardened Runtime throughout, a valid notarization ticket, and Gatekeeper acceptance. That path is not enabled or claimed by the current independent policy.
-
-The independent root and release private keys never enter this repository. The offline root is a long-lived release identity and must be backed up securely; an authorized local producer receives only a rotating leaf key. Release certificates may rotate under that root without changing the root-pinned application identity. Replacing the root is an explicit distribution-identity migration.
-
-Independent certificates have no Apple Team Identifier, so Sparkle cannot apply its optional Apple-team policy to XPC client connections and explicitly treats that policy as non-security-critical. The account-free path does not claim that Apple-team check. Update authenticity instead fails closed on the Ed25519-signed feed and archive, and every shipped updater executable is sealed under the pinned Marauder root identity. Enabling the Apple-team policy would require an Apple-issued signing identity.
+Unsigned, ad-hoc, independently signed, wrong-team, mixed-certificate, tampered, unsealed, thin, relabeled, malformed, mutable, unnotarized, unstapled, Gatekeeper-rejected, or incompletely signed candidates fail closed. Independent signatures may remain useful for private audit artifacts, but they never qualify a public download. The Ed25519 signing key remains mandatory: the publisher never releases an unsigned archive or update feed.
 
 GitHub immutable releases protect final tags and assets after publication. Every publisher run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
 
