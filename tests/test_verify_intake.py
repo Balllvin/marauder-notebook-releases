@@ -80,7 +80,7 @@ class VerifyIntakeTests(unittest.TestCase):
             + f"<!-- sparkle-signatures:\nedSignature: {feed_signature}\nlength: {len(feed_content)}\n-->\n".encode("ascii")
         )
         metadata = {
-            "schema": 1,
+            "schema": 2,
             "product": verify_intake.PRODUCT_NAME,
             "version": version,
             "build_number": build_number,
@@ -103,6 +103,7 @@ class VerifyIntakeTests(unittest.TestCase):
                 "url": f"{verify_intake.DOWNLOAD_URL_PREFIX}/{tag}/{archive_name}.sha256",
             },
             "appcast": {"name": "appcast.xml", "url": verify_intake.FEED_URL, "enclosure_url": archive_url},
+            "signed_distribution": dict(verify_intake.SIGNED_DISTRIBUTION),
         }
         self.write_signed_metadata(intake / "notebook-release.json", metadata)
         trust = {
@@ -173,6 +174,51 @@ class VerifyIntakeTests(unittest.TestCase):
         self.assertEqual(result["tag"], "notebook-v1.2.3-42")
         self.assertEqual(result["source_commit"], "a" * 40)
 
+    def test_rejects_schema_one_and_missing_distribution_attestation(self) -> None:
+        intake, branch = self.make_intake()
+        metadata_path = intake / "notebook-release.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["schema"] = 1
+        self.write_signed_metadata(metadata_path, metadata)
+        with self.assertRaisesRegex(verify_intake.IntakeError, "wrong schema"):
+            self.validate(intake, branch)
+
+        metadata.pop("signed_distribution")
+        self.write_signed_metadata(metadata_path, metadata)
+        legacy = verify_intake.validate_intake(
+            intake,
+            branch,
+            public_key=self.public_key,
+            openssl=self.openssl,
+            allow_legacy_published=True,
+        )
+        self.assertEqual(legacy["distribution_mode"], "independent")
+
+        metadata["schema"] = 2
+        self.write_signed_metadata(metadata_path, metadata)
+        with self.assertRaisesRegex(verify_intake.IntakeError, "missing fields"):
+            self.validate(intake, branch)
+
+    def test_rejects_every_malformed_distribution_attestation(self) -> None:
+        for key, bad_value in (
+            ("code_signature", "Independent"),
+            ("notarization", "pending"),
+            ("ticket", "missing"),
+            ("gatekeeper", "rejected"),
+        ):
+            with self.subTest(key=key):
+                intake, branch = self.make_intake()
+                metadata_path = intake / "notebook-release.json"
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata["signed_distribution"][key] = bad_value
+                self.write_signed_metadata(metadata_path, metadata)
+                with self.assertRaisesRegex(
+                    verify_intake.IntakeError,
+                    "exact Developer ID distribution attestation",
+                ):
+                    self.validate(intake, branch)
+                shutil.rmtree(intake)
+
     def test_rejects_archive_changed_after_signing(self) -> None:
         intake, branch = self.make_intake()
         archive = next(intake.glob("*.zip"))
@@ -230,7 +276,7 @@ class VerifyIntakeTests(unittest.TestCase):
         intake, branch = self.make_intake()
         metadata = intake / "notebook-release.json"
         payload = metadata.read_text(encoding="utf-8")
-        metadata.write_text(payload.replace('{"schema": 1,', '{"schema": 1, "schema": 1,', 1), encoding="utf-8")
+        metadata.write_text(payload.replace('{"schema": 2,', '{"schema": 2, "schema": 2,', 1), encoding="utf-8")
         with self.assertRaisesRegex(verify_intake.IntakeError, "duplicate key"):
             self.validate(intake, branch)
 
@@ -276,6 +322,10 @@ class VerifyIntakeTests(unittest.TestCase):
 
         previous = self.root / "previous-notebook-release.json"
         previous.write_bytes(candidate.read_bytes())
+        previous_metadata = json.loads(previous.read_text(encoding="utf-8"))
+        previous_metadata["schema"] = 1
+        previous_metadata.pop("signed_distribution")
+        self.write_signed_metadata(previous, previous_metadata)
         candidate_metadata = json.loads(candidate.read_text(encoding="utf-8"))
         candidate_metadata["source"]["commit"] = "b" * 40
         candidate_metadata["source"]["previous_commit"] = "a" * 40

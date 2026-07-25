@@ -85,8 +85,10 @@ python3 scripts/verify_intake.py validate \
   --intake "$AUDIT" \
   --branch "$PUBLICATION_BRANCH" \
   --openssl "$OPENSSL_BIN" \
+  --allow-legacy-published \
   --result "$WORK_ROOT/verified-release.json"
 [[ "$(jq -er '.tag' "$WORK_ROOT/verified-release.json")" == "$RELEASE_TAG" ]]
+RELEASE_DISTRIBUTION_MODE="$(jq -er '.distribution_mode' "$WORK_ROOT/verified-release.json")"
 
 EXPECTED_ASSETS="$WORK_ROOT/expected-assets"
 ARCHIVE_NAME="$(jq -er '.archive' "$WORK_ROOT/verified-release.json")"
@@ -103,21 +105,22 @@ VERIFY_ARGUMENTS=(
   --app "$APP"
   --release-version "$RELEASE_VERSION"
   --build-number "$BUILD_NUMBER"
-  --distribution-mode "${NOTEBOOK_DISTRIBUTION_MODE:-independent}"
+  --distribution-mode "$RELEASE_DISTRIBUTION_MODE"
 )
-if [[ "${NOTEBOOK_DISTRIBUTION_MODE:-independent}" == "developer-id" ]]; then
+if [[ "$RELEASE_DISTRIBUTION_MODE" == "developer-id" ]]; then
   [[ "${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}" =~ ^[A-Z0-9]{10}$ ]]
   VERIFY_ARGUMENTS+=(
     --expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"
   )
 else
-  [[ "${NOTEBOOK_DISTRIBUTION_MODE:-independent}" == "independent" ]]
-  [[ -z "${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}" ]]
+  [[ "$RELEASE_DISTRIBUTION_MODE" == "independent" ]]
 fi
 python3 scripts/verify_app_bundle.py "${VERIFY_ARGUMENTS[@]}"
-if [[ "${NOTEBOOK_DISTRIBUTION_MODE:-independent}" == "developer-id" ]]; then
+if [[ "$RELEASE_DISTRIBUTION_MODE" == "developer-id" ]]; then
   /usr/bin/xcrun stapler validate "$APP"
   /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+else
+  echo "Verified one legacy independently signed release as historical input only."
 fi
 
 printf '%s\n' \
