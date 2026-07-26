@@ -251,6 +251,8 @@ class WorkflowContractTests(unittest.TestCase):
             audit.index("/usr/bin/ditto -x -k"),
         )
         self.assertIn("--allow-legacy-published", audit)
+        self.assertIn('"$RELEASE_TAG" == "notebook-v1.0.4-5"', audit)
+        self.assertIn("--allow-legacy-automatic-update-default", audit)
         self.assertIn("RELEASE_DISTRIBUTION_MODE", audit)
         self.assertIn("historical input only", audit)
 
