@@ -23,6 +23,7 @@ The current publishing policy does not require an Apple account or Team ID. Befo
 - the app has no notarization ticket and `spctl` still requires the documented one-time manual approval;
 - the app, every nested executable, and every framework are universal `arm64` and `x86_64` code;
 - the exact bundle identity, version, build, update key, feed URL, deep link, sandbox, file, network, and microphone entitlements match the protected contract;
+- new account-free release candidates keep automatic update checks enabled, while replacement installs require an explicit user opt-in so macOS approval is never triggered silently;
 - the archive checksum, Sparkle Ed25519 archive signature, signed appcast, and signed provenance all validate against the committed public key;
 - the intake contains exactly the five approved immutable files, points to an exact Marauder source commit, and links to the source commit in the latest signed immutable release; and
 - the version and build number are newer than every published release.

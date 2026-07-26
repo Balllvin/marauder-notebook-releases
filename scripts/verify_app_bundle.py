@@ -166,7 +166,11 @@ def _read_signed_entitlements(
 
 
 def verify_info_plist(
-    info: dict[str, Any], *, release_version: str, build_number: str
+    info: dict[str, Any],
+    *,
+    release_version: str,
+    build_number: str,
+    allow_legacy_automatic_update_default: bool = False,
 ) -> None:
     expected: dict[str, object] = {
         "CFBundleDevelopmentRegion": "en",
@@ -192,7 +196,7 @@ def verify_info_plist(
         "SUVerifyUpdateBeforeExtraction": True,
         "SUEnableInstallerLauncherService": True,
         "SUEnableAutomaticChecks": True,
-        "SUAutomaticallyUpdate": True,
+        "SUAutomaticallyUpdate": allow_legacy_automatic_update_default,
         "SUAllowsAutomaticUpdates": True,
     }
     unexpected = set(info) - set(expected)
@@ -297,6 +301,7 @@ def verify_app_bundle(
     build_number: str,
     distribution_mode: str,
     expected_team_identifier: str | None = None,
+    allow_legacy_automatic_update_default: bool = False,
 ) -> None:
     if app.is_symlink() or not app.is_dir() or app.name != f"{EXECUTABLE_NAME}.app":
         raise BundleVerificationError("the release must contain the Marauder Notebook app bundle")
@@ -304,6 +309,7 @@ def verify_app_bundle(
         _read_plist(app / "Contents" / "Info.plist"),
         release_version=release_version,
         build_number=build_number,
+        allow_legacy_automatic_update_default=allow_legacy_automatic_update_default,
     )
     verify_icon(app)
     executable = app / "Contents" / "MacOS" / EXECUTABLE_NAME
@@ -341,6 +347,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--build-number", required=True)
     result.add_argument("--distribution-mode", choices=DISTRIBUTION_MODES, default=INDEPENDENT_MODE)
     result.add_argument("--expected-team-identifier")
+    result.add_argument("--allow-legacy-automatic-update-default", action="store_true")
     return result
 
 
@@ -353,6 +360,9 @@ def main() -> int:
             build_number=arguments.build_number,
             distribution_mode=arguments.distribution_mode,
             expected_team_identifier=arguments.expected_team_identifier,
+            allow_legacy_automatic_update_default=(
+                arguments.allow_legacy_automatic_update_default
+            ),
         )
     except (BundleVerificationError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)

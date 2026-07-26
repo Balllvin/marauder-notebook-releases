@@ -43,7 +43,7 @@ class VerifyAppBundleTests(unittest.TestCase):
             "SUVerifyUpdateBeforeExtraction": True,
             "SUEnableInstallerLauncherService": True,
             "SUEnableAutomaticChecks": True,
-            "SUAutomaticallyUpdate": True,
+            "SUAutomaticallyUpdate": False,
             "SUAllowsAutomaticUpdates": True,
             "CFBundleURLTypes": [
                 {
@@ -116,10 +116,11 @@ class VerifyAppBundleTests(unittest.TestCase):
                 build_number="42",
             )
 
-    def test_rejects_disabled_automatic_updates_or_extra_launch_policy(self) -> None:
+    def test_requires_safe_automatic_update_defaults_and_rejects_extra_launch_policy(
+        self,
+    ) -> None:
         for key in (
             "SUEnableAutomaticChecks",
-            "SUAutomaticallyUpdate",
             "SUAllowsAutomaticUpdates",
         ):
             info = self.info()
@@ -128,6 +129,19 @@ class VerifyAppBundleTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     verify_app_bundle.BundleVerificationError,
                     key,
+                ):
+                    verify_app_bundle.verify_info_plist(
+                        info,
+                        release_version="1.2.3",
+                        build_number="42",
+                    )
+        for value in (True, 0):
+            info = self.info()
+            info["SUAutomaticallyUpdate"] = value
+            with self.subTest(SUAutomaticallyUpdate=value):
+                with self.assertRaisesRegex(
+                    verify_app_bundle.BundleVerificationError,
+                    "SUAutomaticallyUpdate",
                 ):
                     verify_app_bundle.verify_info_plist(
                         info,
@@ -152,6 +166,25 @@ class VerifyAppBundleTests(unittest.TestCase):
                         release_version="1.2.3",
                         build_number="42",
                     )
+
+    def test_accepts_only_the_explicit_legacy_automatic_update_default(self) -> None:
+        info = self.info()
+        info["SUAutomaticallyUpdate"] = True
+        with self.assertRaisesRegex(
+            verify_app_bundle.BundleVerificationError,
+            "SUAutomaticallyUpdate",
+        ):
+            verify_app_bundle.verify_info_plist(
+                info,
+                release_version="1.2.3",
+                build_number="42",
+            )
+        verify_app_bundle.verify_info_plist(
+            info,
+            release_version="1.2.3",
+            build_number="42",
+            allow_legacy_automatic_update_default=True,
+        )
 
     def test_info_plist_requires_every_exact_producer_key(self) -> None:
         for key in tuple(self.info()):

@@ -107,6 +107,9 @@ VERIFY_ARGUMENTS=(
   --build-number "$BUILD_NUMBER"
   --distribution-mode "$RELEASE_DISTRIBUTION_MODE"
 )
+if [[ "$RELEASE_TAG" == "notebook-v1.0.4-5" ]]; then
+  VERIFY_ARGUMENTS+=(--allow-legacy-automatic-update-default)
+fi
 if [[ "$RELEASE_DISTRIBUTION_MODE" == "developer-id" ]]; then
   [[ "${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}" =~ ^[A-Z0-9]{10}$ ]]
   VERIFY_ARGUMENTS+=(
