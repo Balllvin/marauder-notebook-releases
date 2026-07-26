@@ -21,6 +21,17 @@ class WorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
+    def test_publisher_verifiers_run_as_the_shell_invokes_them(self) -> None:
+        for script in ("verify_intake.py", "publish_release.py"):
+            result = subprocess.run(
+                ["python3", f"scripts/{script}", "--help"],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_manual_publisher_workflow_uses_only_protected_main(self) -> None:
         workflow = self.workflow()
         self.assertIn("workflow_dispatch:", workflow)
