@@ -8,7 +8,10 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from scripts.intake_errors import IntakeError
+try:
+    from .intake_errors import IntakeError
+except ImportError:
+    from intake_errors import IntakeError
 
 
 SPARKLE_NAMESPACE = "http://www.andymatuschak.org/xml-namespaces/sparkle"

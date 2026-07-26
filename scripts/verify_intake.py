@@ -11,15 +11,26 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from scripts.intake_errors import IntakeError
-from scripts.intake_signing import (
-    SPARKLE_NAMESPACE,
-    canonical_public_key as _canonical_public_key,
-    canonical_signature as _canonical_signature,
-    require_regular_file as _require_regular_file,
-    validate_appcast as _validate_appcast,
-    verify_ed25519 as _verify_ed25519,
-)
+try:
+    from .intake_errors import IntakeError
+    from .intake_signing import (
+        SPARKLE_NAMESPACE,
+        canonical_public_key as _canonical_public_key,
+        canonical_signature as _canonical_signature,
+        require_regular_file as _require_regular_file,
+        validate_appcast as _validate_appcast,
+        verify_ed25519 as _verify_ed25519,
+    )
+except ImportError:
+    from intake_errors import IntakeError
+    from intake_signing import (
+        SPARKLE_NAMESPACE,
+        canonical_public_key as _canonical_public_key,
+        canonical_signature as _canonical_signature,
+        require_regular_file as _require_regular_file,
+        validate_appcast as _validate_appcast,
+        verify_ed25519 as _verify_ed25519,
+    )
 
 
 RELEASE_REPOSITORY = "Balllvin/marauder-notebook-releases"
