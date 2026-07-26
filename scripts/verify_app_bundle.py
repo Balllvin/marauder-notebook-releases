@@ -106,9 +106,10 @@ APPLE_IDENTITY_ENTITLEMENTS = {
 EXPECTED_NESTED_CODE_ENTITLEMENTS = {
     path: {} for path in EXPECTED_CODE_IDENTIFIERS if path != f"Contents/MacOS/{EXECUTABLE_NAME}"
 }
-EXPECTED_NESTED_CODE_ENTITLEMENTS[
-    "Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
-] = {"com.apple.application-identifier": "org.sparkle-project.Sparkle.Autoupdate"}
+AUTUPDATE_PATH = "Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
+INDEPENDENT_AUTUPDATE_ENTITLEMENTS = {
+    "com.apple.application-identifier": "org.sparkle-project.Sparkle.Autoupdate"
+}
 
 
 def _matches_exactly(actual: object, expected: object) -> bool:
@@ -267,6 +268,7 @@ def verify_nested_code_entitlements(
     app: Path,
     machos: list[Path],
     *,
+    distribution_mode: str,
     entitlement_reader: Callable[[Path, str], dict[str, Any]] = _read_optional_signed_entitlements,
 ) -> None:
     main_executable = app / "Contents" / "MacOS" / EXECUTABLE_NAME
@@ -279,6 +281,8 @@ def verify_nested_code_entitlements(
             raise BundleVerificationError(
                 f"{relative} is outside the expected nested-code entitlement contract"
             )
+        if distribution_mode == INDEPENDENT_MODE and relative == AUTUPDATE_PATH:
+            expected = INDEPENDENT_AUTUPDATE_ENTITLEMENTS
         for architecture in ARCHITECTURES:
             if entitlement_reader(candidate, architecture) != expected:
                 raise BundleVerificationError(
@@ -314,7 +318,11 @@ def verify_app_bundle(
             distribution_mode=distribution_mode,
             team_identifier=expected_team_identifier,
         )
-    verify_nested_code_entitlements(app, machos)
+    verify_nested_code_entitlements(
+        app,
+        machos,
+        distribution_mode=distribution_mode,
+    )
     verify_code_signatures(
         app,
         machos,
