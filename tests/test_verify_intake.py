@@ -51,7 +51,13 @@ class VerifyIntakeTests(unittest.TestCase):
         )
         return base64.b64encode(signature.read_bytes()).decode("ascii")
 
-    def make_intake(self, *, version: str = "1.2.3", build_number: str = "42") -> tuple[Path, str]:
+    def make_intake(
+        self,
+        *,
+        version: str = "1.2.3",
+        build_number: str = "42",
+        distribution_mode: str = "account-free",
+    ) -> tuple[Path, str]:
         intake = self.root / "intake"
         intake.mkdir()
         source_commit = "a" * 40
@@ -103,7 +109,7 @@ class VerifyIntakeTests(unittest.TestCase):
                 "url": f"{verify_intake.DOWNLOAD_URL_PREFIX}/{tag}/{archive_name}.sha256",
             },
             "appcast": {"name": "appcast.xml", "url": verify_intake.FEED_URL, "enclosure_url": archive_url},
-            "signed_distribution": dict(verify_intake.SIGNED_DISTRIBUTION),
+            "signed_distribution": dict(verify_intake.PUBLIC_DISTRIBUTIONS[distribution_mode]),
         }
         self.write_signed_metadata(intake / "notebook-release.json", metadata)
         trust = {
@@ -173,6 +179,11 @@ class VerifyIntakeTests(unittest.TestCase):
         result = self.validate(intake, branch)
         self.assertEqual(result["tag"], "notebook-v1.2.3-42")
         self.assertEqual(result["source_commit"], "a" * 40)
+        self.assertEqual(result["distribution_mode"], "account-free")
+
+    def test_accepts_the_optional_developer_id_distribution(self) -> None:
+        intake, branch = self.make_intake(distribution_mode="developer-id")
+        self.assertEqual(self.validate(intake, branch)["distribution_mode"], "developer-id")
 
     def test_rejects_schema_one_and_missing_distribution_attestation(self) -> None:
         intake, branch = self.make_intake()
@@ -214,7 +225,7 @@ class VerifyIntakeTests(unittest.TestCase):
                 self.write_signed_metadata(metadata_path, metadata)
                 with self.assertRaisesRegex(
                     verify_intake.IntakeError,
-                    "exact Developer ID distribution attestation",
+                    "exact public distribution attestation",
                 ):
                     self.validate(intake, branch)
                 shutil.rmtree(intake)

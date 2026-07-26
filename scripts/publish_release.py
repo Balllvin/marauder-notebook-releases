@@ -136,7 +136,12 @@ class ReleasePublisher:
         self._assert_intake_unchanged()
         cfg.work.mkdir(mode=0o700, parents=True, exist_ok=False)
         notes = cfg.work / "release-notes.md"
-        note = "Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted universal macOS application."
+        note = (
+            "Integrity-verified account-free universal macOS application. "
+            "First launch requires approval in macOS Privacy & Security."
+            if cfg.distribution_mode == "account-free"
+            else "Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted universal macOS application."
+        )
         notes.write_text(
             f"Marauder Notebook {cfg.release_version} ({cfg.build_number})\n\n{note}\n"
             f"Source: Balllvin/marauder@{cfg.source_commit}\n",
@@ -273,8 +278,8 @@ def _config(arguments: argparse.Namespace) -> PublishConfig:
         or publication_lock_commit != arguments.intake_commit
     ):
         raise PublishError("publication lock does not identify the selected intake")
-    if arguments.distribution_mode != "developer-id":
-        raise PublishError("public releases require Developer ID distribution")
+    if arguments.distribution_mode not in verify_intake.PUBLIC_DISTRIBUTIONS:
+        raise PublishError("public releases require an approved distribution mode")
     if (
         verify_intake.SEMANTIC_VERSION.fullmatch(arguments.release_version) is None
         or not arguments.build_number.isascii()

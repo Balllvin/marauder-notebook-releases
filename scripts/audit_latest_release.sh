@@ -112,13 +112,18 @@ if [[ "$RELEASE_DISTRIBUTION_MODE" == "developer-id" ]]; then
   VERIFY_ARGUMENTS+=(
     --expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"
   )
-else
+elif [[ "$RELEASE_DISTRIBUTION_MODE" == "independent" ]]; then
   [[ "$RELEASE_DISTRIBUTION_MODE" == "independent" ]]
+else
+  [[ "$RELEASE_DISTRIBUTION_MODE" == "account-free" ]]
 fi
 python3 scripts/verify_app_bundle.py "${VERIFY_ARGUMENTS[@]}"
 if [[ "$RELEASE_DISTRIBUTION_MODE" == "developer-id" ]]; then
   /usr/bin/xcrun stapler validate "$APP"
   /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+elif [[ "$RELEASE_DISTRIBUTION_MODE" == "account-free" ]]; then
+  python3 scripts/verify_account_free_gatekeeper.py --app "$APP"
+  echo "Verified account-free integrity and the required first-launch macOS approval boundary."
 else
   echo "Verified one legacy independently signed release as historical input only."
 fi

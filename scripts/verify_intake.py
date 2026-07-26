@@ -34,11 +34,19 @@ SEMANTIC_VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*
 BUILD_NUMBER = re.compile(r"[1-9][0-9]*")
 SOURCE_COMMIT = re.compile(r"[0-9a-f]{40}")
 RELEASE_TAG = re.compile(r"notebook-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-([1-9][0-9]*)")
-SIGNED_DISTRIBUTION = {
-    "code_signature": "Developer ID Application",
-    "notarization": "accepted",
-    "ticket": "stapled",
-    "gatekeeper": "accepted",
+PUBLIC_DISTRIBUTIONS = {
+    "account-free": {
+        "code_signature": "ad-hoc",
+        "notarization": "not_available",
+        "ticket": "not_stapled",
+        "gatekeeper": "manual_approval_required",
+    },
+    "developer-id": {
+        "code_signature": "Developer ID Application",
+        "notarization": "accepted",
+        "ticket": "stapled",
+        "gatekeeper": "accepted",
+    },
 }
 
 
@@ -134,11 +142,12 @@ def _verify_provenance(
         payload_path.unlink(missing_ok=True)
 
 
-def _validate_signed_distribution(metadata: dict[str, Any]) -> None:
-    if metadata.get("signed_distribution") != SIGNED_DISTRIBUTION:
-        raise IntakeError(
-            "release metadata lacks the exact Developer ID distribution attestation"
-        )
+def _validate_signed_distribution(metadata: dict[str, Any]) -> str:
+    distribution = metadata.get("signed_distribution")
+    for mode, attestation in PUBLIC_DISTRIBUTIONS.items():
+        if distribution == attestation:
+            return mode
+    raise IntakeError("release metadata lacks an exact public distribution attestation")
 
 
 def _validate_checksum(archive: Path, checksum: Path, expected_digest: object) -> str:
@@ -181,8 +190,7 @@ def validate_intake(
     schema = metadata.get("schema")
     if schema == 2:
         _require_exact_keys(metadata, common_keys | {"signed_distribution"}, "notebook-release.json")
-        _validate_signed_distribution(metadata)
-        distribution_mode = "developer-id"
+        distribution_mode = _validate_signed_distribution(metadata)
     elif schema == 1 and allow_legacy_published:
         _require_exact_keys(metadata, common_keys, "notebook-release.json")
         distribution_mode = "independent"
