@@ -61,16 +61,17 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "false\n")
 
-    def test_public_publisher_requires_the_exact_gatekeeper_contract(self) -> None:
+    def test_public_publisher_requires_the_exact_account_free_contract(self) -> None:
         contract = self.workflow() + self.publisher()
-        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=developer-id", contract)
+        self.assertIn('export NOTEBOOK_DISTRIBUTION_MODE="$DISTRIBUTION_MODE"', contract)
         self.assertIn("NOTEBOOK_EXPECTED_TEAM_IDENTIFIER", contract)
         self.assertIn("^[A-Z0-9]{10}$", contract)
         self.assertIn("scripts/verify_app_bundle.py", contract)
-        self.assertIn("--distribution-mode developer-id", contract)
+        self.assertIn('--distribution-mode "$DISTRIBUTION_MODE"', contract)
         self.assertIn("--expected-team-identifier", contract)
         self.assertIn("xcrun stapler validate", contract)
         self.assertIn("spctl --assess --type execute", contract)
+        self.assertIn("scripts/verify_account_free_gatekeeper.py", contract)
 
     def test_publication_keeps_all_distribution_gates_before_publish(self) -> None:
         workflow = self.publisher()
@@ -87,7 +88,7 @@ class WorkflowContractTests(unittest.TestCase):
             "--previous-manifest",
             "scripts/verify_release_archive.py",
             "scripts/verify_app_bundle.py",
-            "export NOTEBOOK_DISTRIBUTION_MODE=developer-id",
+            'export NOTEBOOK_DISTRIBUTION_MODE="$DISTRIBUTION_MODE"',
         ):
             self.assertIn(contract, workflow)
         for contract in (
@@ -117,7 +118,11 @@ class WorkflowContractTests(unittest.TestCase):
         )
         verifier = "\n".join(
             (REPOSITORY_ROOT / "scripts" / name).read_text(encoding="utf-8")
-            for name in ("verify_app_bundle.py", "code_signing_contract.py")
+            for name in (
+                "verify_app_bundle.py",
+                "macho_contract.py",
+                "code_signing_contract.py",
+            )
         )
         for contract in (
             '"--all-architectures"',
@@ -132,38 +137,40 @@ class WorkflowContractTests(unittest.TestCase):
             "must not depend on an Apple secure timestamp",
             "EXPECTED_NESTED_CODE_ENTITLEMENTS",
             "EXPECTED_CODE_IDENTIFIERS",
+            "ALLOWED_RPATHS",
+            "BUILD_HOST_PATH",
+            "unsafe dynamic dependencies",
         ):
             self.assertIn(contract, verifier)
 
-    def test_local_publication_is_fixed_to_developer_id_distribution(self) -> None:
+    def test_local_publication_uses_the_verified_manifest_distribution(self) -> None:
         workflow = self.publisher()
-        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=developer-id", workflow)
-        self.assertEqual(workflow.count("--distribution-mode developer-id"), 2)
+        self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=\"$DISTRIBUTION_MODE\"", workflow)
+        self.assertEqual(workflow.count('--distribution-mode "$DISTRIBUTION_MODE"'), 2)
+        self.assertIn('.distribution_mode | select(. == "account-free" or . == "developer-id")', workflow)
         self.assertNotIn("--distribution-mode independent", workflow)
         self.assertIn(
-            'arguments.distribution_mode != "developer-id"',
+            "arguments.distribution_mode not in verify_intake.PUBLIC_DISTRIBUTIONS",
             (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
                 encoding="utf-8"
             ),
         )
 
-    def test_user_copy_requires_an_ordinary_gatekeeper_accepted_release(self) -> None:
+    def test_user_copy_explains_account_free_first_launch_approval(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         for contract in (
-            "Developer ID signed",
-            "Apple notarization",
-            "stapled",
-            "accepted by Gatekeeper",
-            "must never need to bypass macOS security",
+            "account-free",
+            "Privacy & Security",
+            "Open Anyway",
         ):
             self.assertIn(contract, readme)
         self.assertIn(
-            "Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted",
+            "Integrity-verified account-free universal macOS application",
             (REPOSITORY_ROOT / "scripts" / "publish_release.py").read_text(
                 encoding="utf-8"
             ),
         )
-        self.assertNotIn("Open Anyway", readme)
+        self.assertNotIn("xattr", readme)
         self.assertNotIn("Control-click", readme)
 
     def test_partial_drafts_are_repaired_before_exact_byte_publication(self) -> None:

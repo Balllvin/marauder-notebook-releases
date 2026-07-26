@@ -94,6 +94,12 @@ class LocalPublisherTests(unittest.TestCase):
         self.assertIn('git init -q "$INTAKE_CHECKOUT"', script)
         self.assertNotIn("git remote add intake", script)
 
+    def test_account_free_mode_requires_manual_approval_instead_of_claiming_gatekeeper_acceptance(self) -> None:
+        script = self.script()
+        self.assertIn('.distribution_mode | select(. == "account-free" or . == "developer-id")', script)
+        self.assertIn("scripts/verify_account_free_gatekeeper.py", script)
+        self.assertIn('--distribution-mode "$DISTRIBUTION_MODE"', script)
+
     def test_origin_normalizer_accepts_only_the_public_publisher(self) -> None:
         for remote_url in (
             "git@github.com:Balllvin/marauder-notebook-releases.git",

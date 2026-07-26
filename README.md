@@ -4,30 +4,30 @@ This repository is the public distribution boundary for Marauder Notebook. It co
 
 ## Download and open
 
-Download the current app from [Releases](https://github.com/Balllvin/marauder-notebook-releases/releases/latest), move **Marauder Notebook** to Applications, and open it. Publication is blocked unless the archive is Developer ID signed, accepted by Apple notarization, stapled with that ticket, and accepted by Gatekeeper. Users must never need to bypass macOS security or clear quarantine to open an ordinary public release. Marauder sign-in is the only product account flow. Later updates are installed by the app from the signed update feed.
+Download the current app from [Releases](https://github.com/Balllvin/marauder-notebook-releases/releases/latest), move **Marauder Notebook** to Applications, and open it once. The account-free release has no Apple-issued Developer ID or notarization ticket, so macOS asks for one explicit approval. Choose Done or OK in the warning, open System Settings, choose Privacy & Security, choose Open Anyway beside Marauder Notebook, then confirm with Open. Do not choose Move to Bin. No terminal command or quarantine change is part of the supported install. Marauder sign-in is the only product account flow. Later updates arrive through the signed update feed.
 
 ## Release integrity
 
 Every published release includes:
 
-- the Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted universal macOS app archive;
+- the exact account-free ad-hoc signed universal macOS app archive with Hardened Runtime;
 - its SHA-256 checksum;
 - the Sparkle update feed;
 - immutable release provenance; and
 - the committed update-trust manifest.
 
-The publishing policy requires one configured Apple Team ID. Before publication it verifies that:
+The current publishing policy does not require an Apple account or Team ID. Before publication it verifies that:
 
-- the main app and every nested Mach-O are signed by the same Developer ID Application certificate for the configured Apple Team ID;
+- the main app and every nested Mach-O have the exact ad-hoc signature identity, no certificate authority, no Apple team, and no secure timestamp;
 - every executable retains Hardened Runtime and every nested executable has exactly the producer-approved entitlement set;
-- Apple's stapler validates the notarization ticket and `spctl` accepts the expanded app before publication;
+- the app has no notarization ticket and `spctl` still requires the documented one-time manual approval;
 - the app, every nested executable, and every framework are universal `arm64` and `x86_64` code;
 - the exact bundle identity, version, build, update key, feed URL, deep link, sandbox, file, network, and microphone entitlements match the protected contract;
 - the archive checksum, Sparkle Ed25519 archive signature, signed appcast, and signed provenance all validate against the committed public key;
 - the intake contains exactly the five approved immutable files, points to an exact Marauder source commit, and links to the source commit in the latest signed immutable release; and
 - the version and build number are newer than every published release.
 
-Unsigned, ad-hoc, independently signed, wrong-team, mixed-certificate, tampered, unsealed, thin, relabeled, malformed, mutable, unnotarized, unstapled, Gatekeeper-rejected, or incompletely signed candidates fail closed. Independent signatures may remain useful for private audit artifacts, but they never qualify a public download. The Ed25519 signing key remains mandatory: the publisher never releases an unsigned archive or update feed.
+Unsigned, incorrectly ad-hoc signed, independently signed, certificate-bearing account-free, timestamped, tampered, unsealed, thin, relabeled, malformed, mutable, or incompletely signed candidates fail closed. Independent signatures remain historical or private audit inputs and never qualify a new public download. The Ed25519 signing key remains mandatory: the publisher never releases an unsigned archive, update feed, or provenance statement.
 
 GitHub immutable releases protect final tags and assets after publication. Every publisher run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
 

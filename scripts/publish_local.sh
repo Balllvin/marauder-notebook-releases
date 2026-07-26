@@ -110,11 +110,6 @@ jq -e '
 
 export GITHUB_REPOSITORY="$REPOSITORY"
 export RUNNER_TEMP="$WORK_ROOT"
-export NOTEBOOK_DISTRIBUTION_MODE=developer-id
-NOTEBOOK_EXPECTED_TEAM_IDENTIFIER="${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}"
-[[ "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]] \
-  || die "NOTEBOOK_EXPECTED_TEAM_IDENTIFIER must be one 10-character Apple Team ID"
-export NOTEBOOK_EXPECTED_TEAM_IDENTIFIER
 
 scripts/verify_openssl.sh >/dev/null
 scripts/audit_latest_release.sh
@@ -178,6 +173,8 @@ SOURCE_COMMIT="$(jq -er .source_commit "$VERIFIED_RELEASE")"
 INTAKE_BRANCH="$(jq -er .branch "$VERIFIED_RELEASE")"
 INTAKE_COMMIT="$(jq -er .intake_commit "$VERIFIED_RELEASE")"
 PUBLICATION_LOCK_COMMIT="$(jq -er .publication_lock_commit "$VERIFIED_RELEASE")"
+DISTRIBUTION_MODE="$(jq -er '.distribution_mode | select(. == "account-free" or . == "developer-id")' "$VERIFIED_RELEASE")"
+export NOTEBOOK_DISTRIBUTION_MODE="$DISTRIBUTION_MODE"
 
 ARCHIVE="$VERIFIED_INTAKE/$ARCHIVE_NAME"
 EXPANDED="$WORK_ROOT/expanded-release"
@@ -189,14 +186,26 @@ APP="$EXPANDED/Marauder Notebook.app"
 EXTRA_ENTRY="$(/usr/bin/find "$EXPANDED" -mindepth 1 -maxdepth 1 \
   ! -name 'Marauder Notebook.app' -print -quit)"
 [[ -z "$EXTRA_ENTRY" ]] || die "verified archive contains an unexpected root entry"
-python3 scripts/verify_app_bundle.py \
-  --app "$APP" \
-  --release-version "$RELEASE_VERSION" \
-  --build-number "$BUILD_NUMBER" \
-  --distribution-mode developer-id \
-  --expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER"
-/usr/bin/xcrun stapler validate "$APP"
-/usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+APP_VERIFY_ARGUMENTS=(
+  --app "$APP"
+  --release-version "$RELEASE_VERSION"
+  --build-number "$BUILD_NUMBER"
+  --distribution-mode "$DISTRIBUTION_MODE"
+)
+if [[ "$DISTRIBUTION_MODE" == "developer-id" ]]; then
+  NOTEBOOK_EXPECTED_TEAM_IDENTIFIER="${NOTEBOOK_EXPECTED_TEAM_IDENTIFIER:-}"
+  [[ "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER" =~ ^[A-Z0-9]{10}$ ]] \
+    || die "NOTEBOOK_EXPECTED_TEAM_IDENTIFIER must be one 10-character Apple Team ID"
+  export NOTEBOOK_EXPECTED_TEAM_IDENTIFIER
+  APP_VERIFY_ARGUMENTS+=(--expected-team-identifier "$NOTEBOOK_EXPECTED_TEAM_IDENTIFIER")
+fi
+python3 scripts/verify_app_bundle.py "${APP_VERIFY_ARGUMENTS[@]}"
+if [[ "$DISTRIBUTION_MODE" == "developer-id" ]]; then
+  /usr/bin/xcrun stapler validate "$APP"
+  /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+else
+  python3 scripts/verify_account_free_gatekeeper.py --app "$APP"
+fi
 
 CURRENT_INTAKE_REF="$(git ls-remote --exit-code --heads \
   "https://github.com/$INTAKE_REPOSITORY.git" \
@@ -254,7 +263,11 @@ python3 scripts/publish_release.py \
   --publication-lock-commit "$PUBLICATION_LOCK_COMMIT" \
   --intake "$VERIFIED_INTAKE" \
   --work "$WORK_ROOT/publish-state" \
-  --distribution-mode developer-id
+  --distribution-mode "$DISTRIBUTION_MODE"
 
 scripts/audit_latest_release.sh
-echo "Published and Gatekeeper-reverified $RELEASE_TAG."
+if [[ "$DISTRIBUTION_MODE" == "account-free" ]]; then
+  echo "Published and integrity-reverified $RELEASE_TAG with first-launch macOS approval required."
+else
+  echo "Published and Gatekeeper-reverified $RELEASE_TAG."
+fi

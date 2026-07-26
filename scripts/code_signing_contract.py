@@ -14,7 +14,8 @@ EXECUTABLE_NAME = "Marauder Notebook"
 ARCHITECTURES = ("arm64", "x86_64")
 INDEPENDENT_MODE = "independent"
 DEVELOPER_ID_MODE = "developer-id"
-DISTRIBUTION_MODES = (INDEPENDENT_MODE, DEVELOPER_ID_MODE)
+ACCOUNT_FREE_MODE = "account-free"
+DISTRIBUTION_MODES = (ACCOUNT_FREE_MODE, INDEPENDENT_MODE, DEVELOPER_ID_MODE)
 TEAM_IDENTIFIER = re.compile(r"[A-Z0-9]{10}")
 CERTIFICATE_SHA256 = re.compile(r"[0-9A-F]{64}")
 CERTIFICATE_SHA1 = re.compile(r"[0-9a-f]{40}")
@@ -123,6 +124,19 @@ def verify_signing_details(
     team_identifier = _single_detail(details, "TeamIdentifier")
     authorities = details.get("Authority", [])
     has_runtime = _has_hardened_runtime(details)
+
+    if distribution_mode == ACCOUNT_FREE_MODE:
+        if expected_team_identifier is not None:
+            raise BundleVerificationError("account-free distribution cannot expect an Apple team")
+        if signature != "adhoc" or team_identifier != "not set":
+            raise BundleVerificationError(f"{label} is not account-free ad-hoc signed")
+        if authorities or details.get("Timestamp") or actual_certificate_chain is not None:
+            raise BundleVerificationError(
+                f"{label} must not contain a certificate authority, timestamp, or chain"
+            )
+        if not has_runtime:
+            raise BundleVerificationError(f"{label} must retain Hardened Runtime")
+        return
 
     if distribution_mode == INDEPENDENT_MODE:
         if expected_team_identifier is not None:
@@ -394,10 +408,13 @@ def verify_code_signatures(
             raise BundleVerificationError(
                 "the app has an unexpected signed-code layout (" + "; ".join(problems) + ")"
             )
-    main_certificate_chain = certificate_chain_for(main_executable, ARCHITECTURES[0])
-    if not main_certificate_chain.sha256:
-        raise BundleVerificationError("the main app has no signing certificate chain")
-    main_leaf_certificate_sha256 = main_certificate_chain.leaf_sha256
+    main_certificate_chain = None
+    main_leaf_certificate_sha256 = None
+    if distribution_mode != ACCOUNT_FREE_MODE:
+        main_certificate_chain = certificate_chain_for(main_executable, ARCHITECTURES[0])
+        if not main_certificate_chain.sha256:
+            raise BundleVerificationError("the main app has no signing certificate chain")
+        main_leaf_certificate_sha256 = main_certificate_chain.leaf_sha256
     for candidate in machos:
         relative = candidate.relative_to(app)
         is_main = candidate == main_executable
@@ -416,7 +433,11 @@ def verify_code_signatures(
                 raise BundleVerificationError(
                     f"{relative} [{architecture}] has the wrong signed code identifier"
                 )
-            actual_certificate_chain = certificate_chain_for(candidate, architecture)
+            actual_certificate_chain = (
+                None
+                if distribution_mode == ACCOUNT_FREE_MODE
+                else certificate_chain_for(candidate, architecture)
+            )
             actual_designated_requirement = (
                 designated_requirement_for(candidate, architecture)
                 if distribution_mode == INDEPENDENT_MODE

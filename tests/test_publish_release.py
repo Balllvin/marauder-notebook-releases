@@ -37,7 +37,8 @@ EXPECTED = sorted(
 def release_body() -> str:
     return (
         "Marauder Notebook 1.2.3 (42)\n\n"
-        "Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted universal macOS application.\n"
+        "Integrity-verified account-free universal macOS application. "
+        "First launch requires approval in macOS Privacy & Security.\n"
         f"Source: Balllvin/marauder@{SOURCE_COMMIT}\n"
     )
 
@@ -172,7 +173,7 @@ class PublishReleaseTests(unittest.TestCase):
             publication_lock_commit=INTAKE_COMMIT,
             intake=self.intake,
             work=root / "work",
-            distribution_mode="developer-id",
+            distribution_mode="account-free",
         )
 
     def publisher(self, gateway: FakeGateway) -> ReleasePublisher:
@@ -214,7 +215,7 @@ class PublishReleaseTests(unittest.TestCase):
     def test_config_rejects_independent_public_distribution(self) -> None:
         arguments = self.config_arguments(INTAKE_COMMIT)
         arguments.distribution_mode = "independent"
-        with self.assertRaisesRegex(PublishError, "require Developer ID"):
+        with self.assertRaisesRegex(PublishError, "approved distribution mode"):
             _config(arguments)
 
     def test_lock_change_before_work_fails_without_creating_a_draft(self) -> None:
