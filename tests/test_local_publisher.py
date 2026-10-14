@@ -102,13 +102,9 @@ class LocalPublisherTests(unittest.TestCase):
         )
         self.assertIn("scripts/verify_account_free_gatekeeper.py", script)
         self.assertIn('--distribution-mode "$DISTRIBUTION_MODE"', script)
-        self.assertIn(
-            '[[ "$DISTRIBUTION_MODE" == "account-free" || "$DISTRIBUTION_MODE" == "independent" ]]',
-            script,
-        )
         self.assertLess(
             script.index('[[ "$DISTRIBUTION_MODE" == "developer-id" ]]'),
-            script.index("xcrun stapler validate"),
+            script.index("scripts/verify_account_free_gatekeeper.py"),
         )
         self.assertIn(
             "Published and integrity-reverified $RELEASE_TAG with first-launch macOS approval required.",

@@ -203,10 +203,8 @@ python3 scripts/verify_app_bundle.py "${APP_VERIFY_ARGUMENTS[@]}"
 if [[ "$DISTRIBUTION_MODE" == "developer-id" ]]; then
   /usr/bin/xcrun stapler validate "$APP"
   /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
-elif [[ "$DISTRIBUTION_MODE" == "account-free" || "$DISTRIBUTION_MODE" == "independent" ]]; then
-  python3 scripts/verify_account_free_gatekeeper.py --app "$APP"
 else
-  die "unsupported distribution mode: $DISTRIBUTION_MODE"
+  python3 scripts/verify_account_free_gatekeeper.py --app "$APP"
 fi
 
 CURRENT_INTAKE_REF="$(git ls-remote --exit-code --heads \

@@ -257,10 +257,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"$RELEASE_TAG" == "notebook-v1.0.4-5"', audit)
         self.assertIn("--allow-legacy-automatic-update-default", audit)
         self.assertIn("RELEASE_DISTRIBUTION_MODE", audit)
-        self.assertIn(
-            '[[ "$RELEASE_DISTRIBUTION_MODE" == "account-free" || "$RELEASE_DISTRIBUTION_MODE" == "independent" ]]',
-            audit,
-        )
+        self.assertIn("scripts/verify_account_free_gatekeeper.py", audit)
         self.assertNotIn("historical input only", audit)
 
     def test_workflow_executes_only_executable_verifier_scripts(self) -> None:

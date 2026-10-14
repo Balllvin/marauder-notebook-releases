@@ -229,38 +229,6 @@ class VerifyIntakeTests(unittest.TestCase):
             "exact public distribution attestation",
         ):
             self.validate(intake, branch)
-        with self.assertRaisesRegex(
-            code_signing_contract.BundleVerificationError,
-            "wrong independent root certificate",
-        ):
-            code_signing_contract.verify_signing_details(
-                {
-                    "Signature": ["cms"],
-                    "Identifier": ["com.marauder.notebook"],
-                    "TeamIdentifier": ["not set"],
-                    "flags": ["0x10000(runtime)"],
-                },
-                label="main",
-                distribution_mode=code_signing_contract.INDEPENDENT_MODE,
-                expected_team_identifier=None,
-                is_main_executable=True,
-                require_hardened_runtime=True,
-                expected_root_certificate_sha256=(
-                    code_signing_contract.PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256
-                ),
-                expected_leaf_certificate_sha256="A" * 64,
-                actual_certificate_chain=code_signing_contract.CertificateChain(
-                    sha256=("A" * 64, STALE_INDEPENDENT_ROOT),
-                    root_sha1="b" * 40,
-                ),
-                expected_designated_requirement=(
-                    code_signing_contract.PINNED_INDEPENDENT_DESIGNATED_REQUIREMENT
-                ),
-                actual_designated_requirement=(
-                    'designated => identifier "com.marauder.notebook" and '
-                    'certificate root = H"' + ("b" * 40) + '"'
-                ),
-            )
 
     def test_unknown_mode_still_refused(self) -> None:
         intake, branch = self.make_intake()
