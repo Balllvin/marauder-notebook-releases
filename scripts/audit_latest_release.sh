@@ -124,11 +124,12 @@ python3 scripts/verify_app_bundle.py "${VERIFY_ARGUMENTS[@]}"
 if [[ "$RELEASE_DISTRIBUTION_MODE" == "developer-id" ]]; then
   /usr/bin/xcrun stapler validate "$APP"
   /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
-elif [[ "$RELEASE_DISTRIBUTION_MODE" == "account-free" ]]; then
+elif [[ "$RELEASE_DISTRIBUTION_MODE" == "account-free" || "$RELEASE_DISTRIBUTION_MODE" == "independent" ]]; then
   python3 scripts/verify_account_free_gatekeeper.py --app "$APP"
-  echo "Verified account-free integrity and the required first-launch macOS approval boundary."
+  echo "Verified $RELEASE_DISTRIBUTION_MODE integrity and the required first-launch macOS approval boundary."
 else
-  echo "Verified one legacy independently signed release as historical input only."
+  echo "error: unsupported distribution mode: $RELEASE_DISTRIBUTION_MODE" >&2
+  exit 1
 fi
 
 printf '%s\n' \

@@ -158,7 +158,10 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = self.publisher()
         self.assertIn("export NOTEBOOK_DISTRIBUTION_MODE=\"$DISTRIBUTION_MODE\"", workflow)
         self.assertEqual(workflow.count('--distribution-mode "$DISTRIBUTION_MODE"'), 2)
-        self.assertIn('.distribution_mode | select(. == "account-free" or . == "developer-id")', workflow)
+        self.assertIn(
+            '.distribution_mode | select(. == "account-free" or . == "developer-id" or . == "independent")',
+            workflow,
+        )
         self.assertNotIn("--distribution-mode independent", workflow)
         self.assertIn(
             "arguments.distribution_mode not in verify_intake.PUBLIC_DISTRIBUTIONS",
@@ -254,7 +257,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('"$RELEASE_TAG" == "notebook-v1.0.4-5"', audit)
         self.assertIn("--allow-legacy-automatic-update-default", audit)
         self.assertIn("RELEASE_DISTRIBUTION_MODE", audit)
-        self.assertIn("historical input only", audit)
+        self.assertIn(
+            '[[ "$RELEASE_DISTRIBUTION_MODE" == "account-free" || "$RELEASE_DISTRIBUTION_MODE" == "independent" ]]',
+            audit,
+        )
+        self.assertNotIn("historical input only", audit)
 
     def test_workflow_executes_only_executable_verifier_scripts(self) -> None:
         for name in (

@@ -10,7 +10,7 @@ Download the current app from [Releases](https://github.com/Balllvin/marauder-no
 
 Every published release includes:
 
-- the exact account-free ad-hoc signed universal macOS app archive with Hardened Runtime;
+- the exact universal macOS app archive with Hardened Runtime, signed as account-free, independent, or Developer ID;
 - its SHA-256 checksum;
 - the Sparkle update feed;
 - immutable release provenance; and
@@ -28,7 +28,7 @@ The current publishing policy does not require an Apple account or Team ID. Befo
 - the intake contains exactly the five approved immutable files, points to an exact Marauder source commit, and links to the source commit in the latest signed immutable release; and
 - the version and build number are newer than every published release.
 
-Unsigned, incorrectly ad-hoc signed, independently signed, certificate-bearing account-free, timestamped, tampered, unsealed, thin, relabeled, malformed, mutable, or incompletely signed candidates fail closed. Independent signatures remain historical or private audit inputs and never qualify a new public download. The Ed25519 signing key remains mandatory: the publisher never releases an unsigned archive, update feed, or provenance statement.
+Unsigned, incorrectly ad-hoc signed, certificate-bearing account-free, timestamped, tampered, unsealed, thin, relabeled, malformed, mutable, or incompletely signed candidates fail closed. An independent signature qualifies only when its attestation and designated requirement match the pinned root. It is not an Apple notarization, so first launch still needs one approval in Privacy & Security. The Ed25519 signing key remains mandatory: the publisher never releases an unsigned archive, update feed, or provenance statement.
 
 GitHub immutable releases protect final tags and assets after publication. Every publisher run rechecks the full release history and attestations, downloads the latest release, revalidates all five signed assets, expands the archive, and repeats the complete bundle/signature verification.
 
