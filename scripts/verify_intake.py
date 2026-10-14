@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .code_signing_contract import PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256
     from .intake_errors import IntakeError
     from .intake_signing import (
         SPARKLE_NAMESPACE,
@@ -22,6 +23,7 @@ try:
         verify_ed25519 as _verify_ed25519,
     )
 except ImportError:
+    from code_signing_contract import PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256
     from intake_errors import IntakeError
     from intake_signing import (
         SPARKLE_NAMESPACE,
@@ -57,6 +59,13 @@ PUBLIC_DISTRIBUTIONS = {
         "notarization": "accepted",
         "ticket": "stapled",
         "gatekeeper": "accepted",
+    },
+    "independent": {
+        "code_signature": "independent",
+        "notarization": "not_available",
+        "ticket": "not_stapled",
+        "gatekeeper": "manual_approval_required",
+        "root_certificate_sha256": PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256,
     },
 }
 
