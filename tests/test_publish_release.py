@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import tempfile
 import unittest
@@ -212,11 +213,23 @@ class PublishReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(PublishError, "does not identify"):
             _config(self.config_arguments("d" * 40))
 
-    def test_config_rejects_independent_public_distribution(self) -> None:
+    def test_config_accepts_independent_and_rejects_unknown_mode(self) -> None:
         arguments = self.config_arguments(INTAKE_COMMIT)
         arguments.distribution_mode = "independent"
+        self.assertEqual(_config(arguments).distribution_mode, "independent")
+        arguments.distribution_mode = "mystery"
         with self.assertRaisesRegex(PublishError, "approved distribution mode"):
             _config(arguments)
+        gateway = FakeGateway()
+        publisher = ReleasePublisher(
+            gateway,
+            dataclasses.replace(self.config, distribution_mode="independent"),
+        )
+        self.assertEqual(publisher.run(), PublishState.ATTESTED)
+        body = str(gateway.release["body"])
+        self.assertIn("not notarized by Apple.", body)
+        self.assertNotIn("Apple-notarized", body)
+        self.assertNotIn("Gatekeeper-accepted", body)
 
     def test_lock_change_before_work_fails_without_creating_a_draft(self) -> None:
         gateway = FakeGateway()

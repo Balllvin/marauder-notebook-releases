@@ -96,9 +96,20 @@ class LocalPublisherTests(unittest.TestCase):
 
     def test_account_free_mode_requires_manual_approval_instead_of_claiming_gatekeeper_acceptance(self) -> None:
         script = self.script()
-        self.assertIn('.distribution_mode | select(. == "account-free" or . == "developer-id")', script)
+        self.assertIn(
+            '.distribution_mode | select(. == "account-free" or . == "developer-id" or . == "independent")',
+            script,
+        )
         self.assertIn("scripts/verify_account_free_gatekeeper.py", script)
         self.assertIn('--distribution-mode "$DISTRIBUTION_MODE"', script)
+        self.assertLess(
+            script.index('[[ "$DISTRIBUTION_MODE" == "developer-id" ]]'),
+            script.index("scripts/verify_account_free_gatekeeper.py"),
+        )
+        self.assertIn(
+            "Published and integrity-reverified $RELEASE_TAG with first-launch macOS approval required.",
+            script,
+        )
 
     def test_origin_normalizer_accepts_only_the_public_publisher(self) -> None:
         for remote_url in (

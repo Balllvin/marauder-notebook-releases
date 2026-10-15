@@ -173,7 +173,7 @@ SOURCE_COMMIT="$(jq -er .source_commit "$VERIFIED_RELEASE")"
 INTAKE_BRANCH="$(jq -er .branch "$VERIFIED_RELEASE")"
 INTAKE_COMMIT="$(jq -er .intake_commit "$VERIFIED_RELEASE")"
 PUBLICATION_LOCK_COMMIT="$(jq -er .publication_lock_commit "$VERIFIED_RELEASE")"
-DISTRIBUTION_MODE="$(jq -er '.distribution_mode | select(. == "account-free" or . == "developer-id")' "$VERIFIED_RELEASE")"
+DISTRIBUTION_MODE="$(jq -er '.distribution_mode | select(. == "account-free" or . == "developer-id" or . == "independent")' "$VERIFIED_RELEASE")"
 export NOTEBOOK_DISTRIBUTION_MODE="$DISTRIBUTION_MODE"
 
 ARCHIVE="$VERIFIED_INTAKE/$ARCHIVE_NAME"
@@ -266,8 +266,8 @@ python3 scripts/publish_release.py \
   --distribution-mode "$DISTRIBUTION_MODE"
 
 scripts/audit_latest_release.sh
-if [[ "$DISTRIBUTION_MODE" == "account-free" ]]; then
-  echo "Published and integrity-reverified $RELEASE_TAG with first-launch macOS approval required."
-else
+if [[ "$DISTRIBUTION_MODE" == "developer-id" ]]; then
   echo "Published and Gatekeeper-reverified $RELEASE_TAG."
+else
+  echo "Published and integrity-reverified $RELEASE_TAG with first-launch macOS approval required."
 fi

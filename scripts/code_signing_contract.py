@@ -26,11 +26,11 @@ INDEPENDENT_DESIGNATED_REQUIREMENT = re.compile(
 # Leaf release certificates may rotate under this offline root without changing
 # the root-pinned application identity.
 PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256 = (
-    "D4F9B7D2F3DDDCAE1DB960B555EA96A9A10EBCED7314C56301AFDFB611E4F1A3"
+    "C4C1703EA20D4C4B63505805A9D4B275B1DD70996BF5F128BBF2E83F7F116623"
 )
 PINNED_INDEPENDENT_DESIGNATED_REQUIREMENT = (
     'designated => identifier "com.marauder.notebook" and '
-    'certificate root = H"7776224323dbd2e79ed7430e0c7efb2196523c0f"'
+    'certificate root = H"8b56890bfb7c1c2fcfde25cee82fdd481312f9ed"'
 )
 # app_bundle.sh stages Sparkle 2.9.4 and preserves each code object's existing
 # identifier when it applies the root-bound designated requirement. Pinning the

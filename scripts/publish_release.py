@@ -136,12 +136,24 @@ class ReleasePublisher:
         self._assert_intake_unchanged()
         cfg.work.mkdir(mode=0o700, parents=True, exist_ok=False)
         notes = cfg.work / "release-notes.md"
-        note = (
-            "Integrity-verified account-free universal macOS application. "
-            "First launch requires approval in macOS Privacy & Security."
-            if cfg.distribution_mode == "account-free"
-            else "Developer ID signed, Apple-notarized, stapled, and Gatekeeper-accepted universal macOS application."
-        )
+        if cfg.distribution_mode == "developer-id":
+            note = (
+                "Developer ID signed, Apple-notarized, stapled, and "
+                "Gatekeeper-accepted universal macOS application."
+            )
+        elif cfg.distribution_mode == "independent":
+            note = (
+                "Independently signed universal macOS application. "
+                "First launch requires approval in macOS Privacy & Security. "
+                "This build is not notarized by Apple."
+            )
+        elif cfg.distribution_mode == "account-free":
+            note = (
+                "Integrity-verified account-free universal macOS application. "
+                "First launch requires approval in macOS Privacy & Security."
+            )
+        else:
+            raise PublishError("public releases require an approved distribution mode")
         notes.write_text(
             f"Marauder Notebook {cfg.release_version} ({cfg.build_number})\n\n{note}\n"
             f"Source: Balllvin/marauder@{cfg.source_commit}\n",

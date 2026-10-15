@@ -9,7 +9,21 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts import verify_intake
+from scripts import code_signing_contract, verify_intake
+
+
+EXPECTED_INDEPENDENT_ATTESTATION = {
+    "code_signature": "independent",
+    "notarization": "not_available",
+    "ticket": "not_stapled",
+    "gatekeeper": "manual_approval_required",
+    "root_certificate_sha256": "C4C1703EA20D4C4B63505805A9D4B275B1DD70996BF5F128BBF2E83F7F116623",
+}
+EXPECTED_INDEPENDENT_DESIGNATED_REQUIREMENT = (
+    'designated => identifier "com.marauder.notebook" and '
+    'certificate root = H"8b56890bfb7c1c2fcfde25cee82fdd481312f9ed"'
+)
+STALE_INDEPENDENT_ROOT = "D4F9B7D2F3DDDCAE1DB960B555EA96A9A10EBCED7314C56301AFDFB611E4F1A3"
 
 
 class VerifyIntakeTests(unittest.TestCase):
@@ -184,6 +198,54 @@ class VerifyIntakeTests(unittest.TestCase):
     def test_accepts_the_optional_developer_id_distribution(self) -> None:
         intake, branch = self.make_intake(distribution_mode="developer-id")
         self.assertEqual(self.validate(intake, branch)["distribution_mode"], "developer-id")
+
+    def test_independent_attestation_is_accepted(self) -> None:
+        self.assertEqual(
+            verify_intake.PUBLIC_DISTRIBUTIONS["independent"],
+            EXPECTED_INDEPENDENT_ATTESTATION,
+        )
+        self.assertEqual(
+            code_signing_contract.PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256,
+            EXPECTED_INDEPENDENT_ATTESTATION["root_certificate_sha256"],
+        )
+        self.assertEqual(
+            code_signing_contract.PINNED_INDEPENDENT_DESIGNATED_REQUIREMENT,
+            EXPECTED_INDEPENDENT_DESIGNATED_REQUIREMENT,
+        )
+        intake, branch = self.make_intake(distribution_mode="independent")
+        result = self.validate(intake, branch)
+        self.assertEqual(result["distribution_mode"], "independent")
+        metadata = json.loads((intake / "notebook-release.json").read_text(encoding="utf-8"))
+        self.assertEqual(metadata["signed_distribution"], EXPECTED_INDEPENDENT_ATTESTATION)
+
+    def test_independent_requires_pinned_root(self) -> None:
+        intake, branch = self.make_intake(distribution_mode="independent")
+        metadata_path = intake / "notebook-release.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["signed_distribution"]["root_certificate_sha256"] = STALE_INDEPENDENT_ROOT
+        self.write_signed_metadata(metadata_path, metadata)
+        with self.assertRaisesRegex(
+            verify_intake.IntakeError,
+            "exact public distribution attestation",
+        ):
+            self.validate(intake, branch)
+
+    def test_unknown_mode_still_refused(self) -> None:
+        intake, branch = self.make_intake()
+        metadata_path = intake / "notebook-release.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["signed_distribution"] = {
+            "code_signature": "mystery",
+            "notarization": "not_available",
+            "ticket": "not_stapled",
+            "gatekeeper": "manual_approval_required",
+        }
+        self.write_signed_metadata(metadata_path, metadata)
+        with self.assertRaisesRegex(
+            verify_intake.IntakeError,
+            "exact public distribution attestation",
+        ):
+            self.validate(intake, branch)
 
     def test_rejects_schema_one_and_missing_distribution_attestation(self) -> None:
         intake, branch = self.make_intake()
