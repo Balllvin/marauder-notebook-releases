@@ -98,6 +98,11 @@ REQUIRED_ENTITLEMENTS: dict[str, object] = {
         "com.marauder.notebook-spki",
     ],
 }
+INDEPENDENT_MAIN_ENTITLEMENTS: dict[str, object] = {
+    **REQUIRED_ENTITLEMENTS,
+    "com.apple.security.application-groups": ["group.com.marauder.notebook"],
+    "com.apple.security.network.server": True,
+}
 APPLE_IDENTITY_ENTITLEMENTS = {
     "com.apple.application-identifier",
     "com.apple.developer.team-identifier",
@@ -106,10 +111,47 @@ APPLE_IDENTITY_ENTITLEMENTS = {
 EXPECTED_NESTED_CODE_ENTITLEMENTS = {
     path: {} for path in EXPECTED_CODE_IDENTIFIERS if path != f"Contents/MacOS/{EXECUTABLE_NAME}"
 }
+HARNESS_PATH = "Contents/MacOS/notebook-harness"
+CONTROL_PATH = "Contents/MacOS/notebook-control"
+INDEPENDENT_CODE_IDENTIFIERS = {
+    **EXPECTED_CODE_IDENTIFIERS,
+    HARNESS_PATH: "com.marauder.notebook.harness",
+    CONTROL_PATH: "com.marauder.notebook.control",
+}
+INDEPENDENT_HELPER_ENTITLEMENTS = {
+    "com.apple.security.app-sandbox": True,
+    "com.apple.security.inherit": True,
+}
 AUTUPDATE_PATH = "Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"
 INDEPENDENT_AUTUPDATE_ENTITLEMENTS = {
     "com.apple.application-identifier": "org.sparkle-project.Sparkle.Autoupdate"
 }
+
+
+def _main_entitlements(distribution_mode: str) -> dict[str, object]:
+    if distribution_mode == INDEPENDENT_MODE:
+        return INDEPENDENT_MAIN_ENTITLEMENTS
+    return REQUIRED_ENTITLEMENTS
+
+
+def _nested_entitlements(distribution_mode: str) -> dict[str, dict[str, object]]:
+    if distribution_mode != INDEPENDENT_MODE:
+        return EXPECTED_NESTED_CODE_ENTITLEMENTS
+    table: dict[str, dict[str, object]] = {
+        path: {}
+        for path in INDEPENDENT_CODE_IDENTIFIERS
+        if path != f"Contents/MacOS/{EXECUTABLE_NAME}"
+    }
+    table[AUTUPDATE_PATH] = INDEPENDENT_AUTUPDATE_ENTITLEMENTS
+    table[HARNESS_PATH] = INDEPENDENT_HELPER_ENTITLEMENTS
+    table[CONTROL_PATH] = INDEPENDENT_HELPER_ENTITLEMENTS
+    return table
+
+
+def _code_identifiers(distribution_mode: str) -> dict[str, str]:
+    if distribution_mode == INDEPENDENT_MODE:
+        return INDEPENDENT_CODE_IDENTIFIERS
+    return EXPECTED_CODE_IDENTIFIERS
 
 
 def _matches_exactly(actual: object, expected: object) -> bool:
@@ -235,10 +277,11 @@ def verify_entitlements(
     distribution_mode: str,
     team_identifier: str | None = None,
 ) -> None:
-    for key, value in REQUIRED_ENTITLEMENTS.items():
+    expected = _main_entitlements(distribution_mode)
+    for key, value in expected.items():
         if not _matches_exactly(entitlements.get(key), value):
             raise BundleVerificationError(f"the signed app has an unexpected {key} entitlement")
-    unexpected = set(entitlements) - set(REQUIRED_ENTITLEMENTS) - APPLE_IDENTITY_ENTITLEMENTS
+    unexpected = set(entitlements) - set(expected) - APPLE_IDENTITY_ENTITLEMENTS
     if unexpected:
         raise BundleVerificationError(
             "the signed app has unexpected entitlements: " + ", ".join(sorted(unexpected))
@@ -276,17 +319,16 @@ def verify_nested_code_entitlements(
     entitlement_reader: Callable[[Path, str], dict[str, Any]] = _read_optional_signed_entitlements,
 ) -> None:
     main_executable = app / "Contents" / "MacOS" / EXECUTABLE_NAME
+    expected_table = _nested_entitlements(distribution_mode)
     for candidate in machos:
         if candidate == main_executable:
             continue
         relative = candidate.relative_to(app).as_posix()
-        expected = EXPECTED_NESTED_CODE_ENTITLEMENTS.get(relative)
+        expected = expected_table.get(relative)
         if expected is None:
             raise BundleVerificationError(
                 f"{relative} is outside the expected nested-code entitlement contract"
             )
-        if distribution_mode == INDEPENDENT_MODE and relative == AUTUPDATE_PATH:
-            expected = INDEPENDENT_AUTUPDATE_ENTITLEMENTS
         for architecture in ARCHITECTURES:
             if entitlement_reader(candidate, architecture) != expected:
                 raise BundleVerificationError(
@@ -336,7 +378,7 @@ def verify_app_bundle(
         expected_team_identifier=expected_team_identifier,
         expected_root_certificate_sha256=PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256,
         expected_designated_requirement=PINNED_INDEPENDENT_DESIGNATED_REQUIREMENT,
-        expected_code_identifiers=EXPECTED_CODE_IDENTIFIERS,
+        expected_code_identifiers=_code_identifiers(distribution_mode),
     )
 
 

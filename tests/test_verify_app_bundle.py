@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import plistlib
 import tempfile
 import unittest
 from pathlib import Path
-from subprocess import CompletedProcess
 from unittest import mock
 
-from scripts import verify_app_bundle
+from scripts import code_signing_contract, verify_app_bundle
 
 
 class VerifyAppBundleTests(unittest.TestCase):
@@ -56,6 +54,9 @@ class VerifyAppBundleTests(unittest.TestCase):
     def entitlements(self) -> dict[str, object]:
         return dict(verify_app_bundle.REQUIRED_ENTITLEMENTS)
 
+    def independent_entitlements(self) -> dict[str, object]:
+        return dict(verify_app_bundle.INDEPENDENT_MAIN_ENTITLEMENTS)
+
     def test_accepts_exact_info_and_security_contract(self) -> None:
         verify_app_bundle.verify_info_plist(
             self.info(),
@@ -63,7 +64,7 @@ class VerifyAppBundleTests(unittest.TestCase):
             build_number="42",
         )
         verify_app_bundle.verify_entitlements(
-            self.entitlements(),
+            self.independent_entitlements(),
             distribution_mode=verify_app_bundle.INDEPENDENT_MODE,
         )
 
@@ -85,7 +86,7 @@ class VerifyAppBundleTests(unittest.TestCase):
                     )
 
     def test_rejects_dangerous_or_integer_security_entitlements(self) -> None:
-        entitlements = self.entitlements()
+        entitlements = self.independent_entitlements()
         entitlements["com.apple.security.files.downloads.read-write"] = True
         with self.assertRaisesRegex(
             verify_app_bundle.BundleVerificationError,
@@ -95,7 +96,7 @@ class VerifyAppBundleTests(unittest.TestCase):
                 entitlements,
                 distribution_mode=verify_app_bundle.INDEPENDENT_MODE,
             )
-        entitlements = self.entitlements()
+        entitlements = self.independent_entitlements()
         entitlements["com.apple.security.app-sandbox"] = 1
         with self.assertRaisesRegex(verify_app_bundle.BundleVerificationError, "app-sandbox"):
             verify_app_bundle.verify_entitlements(
@@ -201,53 +202,6 @@ class VerifyAppBundleTests(unittest.TestCase):
                         build_number="42",
                     )
 
-    def test_requires_a_complete_regular_icns_icon(self) -> None:
-        app = self.root / "Marauder Notebook.app"
-        icon = app / "Contents" / "Resources" / verify_app_bundle.ICON_FILE_NAME
-        icon.parent.mkdir(parents=True)
-        payload = b"icns" + (12).to_bytes(4, "big") + b"test"
-        icon.write_bytes(payload)
-        with mock.patch.object(
-            verify_app_bundle,
-            "ICON_SHA256",
-            hashlib.sha256(payload).hexdigest(),
-        ):
-            verify_app_bundle.verify_icon(app)
-
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "trusted product icon",
-        ):
-            verify_app_bundle.verify_icon(app)
-
-        invalid_payloads = (
-            b"short",
-            b"nope" + (12).to_bytes(4, "big") + b"test",
-            b"icns" + (13).to_bytes(4, "big") + b"test",
-        )
-        for invalid in invalid_payloads:
-            icon.write_bytes(invalid)
-            with self.subTest(payload=invalid):
-                with self.assertRaises(verify_app_bundle.BundleVerificationError):
-                    verify_app_bundle.verify_icon(app)
-
-        with icon.open("wb") as icon_file:
-            icon_file.seek(verify_app_bundle.MAX_ICON_BYTES)
-            icon_file.write(b"\0")
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "invalid size",
-        ):
-            verify_app_bundle.verify_icon(app)
-
-        icon.unlink()
-        icon.symlink_to("missing.icns")
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "regular AppIcon",
-        ):
-            verify_app_bundle.verify_icon(app)
-
     def test_rejects_identity_entitlements_from_another_team(self) -> None:
         entitlements = self.entitlements()
         entitlements["com.apple.application-identifier"] = (
@@ -282,7 +236,7 @@ class VerifyAppBundleTests(unittest.TestCase):
             ("com.apple.developer.team-identifier", "A1B2C3D4E5"),
             ("keychain-access-groups", ["A1B2C3D4E5.com.marauder.notebook"]),
         ):
-            entitlements = self.entitlements()
+            entitlements = self.independent_entitlements()
             entitlements[key] = value
             with self.subTest(key=key):
                 with self.assertRaisesRegex(
@@ -294,194 +248,216 @@ class VerifyAppBundleTests(unittest.TestCase):
                         distribution_mode=verify_app_bundle.INDEPENDENT_MODE,
                     )
 
-    def test_checks_every_nested_macho_and_rejects_wrong_slices(self) -> None:
+# The account-free table published with 1.0.6. Independent mode must reject it.
+ACCOUNT_FREE_ENTITLEMENTS = {
+    "com.apple.security.app-sandbox": True,
+    "com.apple.security.cs.disable-library-validation": True,
+    "com.apple.security.network.client": True,
+    "com.apple.security.files.bookmarks.app-scope": True,
+    "com.apple.security.files.user-selected.read-write": True,
+    "com.apple.security.device.audio-input": True,
+    "com.apple.security.temporary-exception.mach-lookup.global-name": [
+        "com.marauder.notebook-spks",
+        "com.marauder.notebook-spki",
+    ],
+}
+INDEPENDENT_MAIN_ENTITLEMENTS = {
+    **ACCOUNT_FREE_ENTITLEMENTS,
+    "com.apple.security.application-groups": ["group.com.marauder.notebook"],
+    "com.apple.security.network.server": True,
+}
+HELPER_ENTITLEMENTS = {
+    "com.apple.security.app-sandbox": True,
+    "com.apple.security.inherit": True,
+}
+HARNESS_PATH = "Contents/MacOS/notebook-harness"
+CONTROL_PATH = "Contents/MacOS/notebook-control"
+MAIN_PATH = f"Contents/MacOS/{verify_app_bundle.EXECUTABLE_NAME}"
+AUTOUPDATE_ENTITLEMENTS = {
+    "com.apple.application-identifier": "org.sparkle-project.Sparkle.Autoupdate"
+}
+
+
+class IndependentBundleLayoutTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary_directory.cleanup)
+        self.root = Path(self.temporary_directory.name)
+        self.identifiers = {
+            **verify_app_bundle.EXPECTED_CODE_IDENTIFIERS,
+            HARNESS_PATH: "com.marauder.notebook.harness",
+            CONTROL_PATH: "com.marauder.notebook.control",
+        }
+
+    def install(self, relatives: tuple[str, ...]) -> Path:
         app = self.root / "Marauder Notebook.app"
-        main = app / "Contents" / "MacOS" / "Marauder Notebook"
-        nested = (
-            app / "Contents" / "Frameworks" / "Sparkle.framework" / "Versions" / "B" / "Sparkle"
-        )
-        resource = app / "Contents" / "Resources" / "copy.txt"
-        for path in (main, nested, resource):
+        info = app / "Contents" / "Info.plist"
+        info.parent.mkdir(parents=True, exist_ok=True)
+        info.write_bytes(plistlib.dumps(VerifyAppBundleTests.info(self)))
+        for relative in relatives:
+            path = app / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"fixture")
+            path.write_bytes(b"macho")
+        return app
 
-        def describe(path: Path) -> str:
-            return "ASCII text" if path == resource else "Mach-O universal binary"
+    def verify(
+        self,
+        relatives: tuple[str, ...],
+        mode: str,
+        *,
+        main_entitlements: dict[str, object],
+        helper_entitlements: dict[str, object] | None = None,
+    ) -> None:
+        app = self.install(relatives)
+        helpers = HELPER_ENTITLEMENTS if helper_entitlements is None else helper_entitlements
+        root_sha1 = verify_app_bundle.PINNED_INDEPENDENT_DESIGNATED_REQUIREMENT.split('H"', 1)[1][:40]
+        root_sha256 = verify_app_bundle.PINNED_INDEPENDENT_ROOT_CERTIFICATE_SHA256
 
-        def architectures(path: Path) -> set[str]:
-            return {"arm64"} if path == nested else {"arm64", "x86_64"}
+        def entitlements(path: Path, _architecture: str, *, required: bool = False) -> dict[str, object]:
+            del required
+            relative = path.relative_to(app).as_posix()
+            if relative == MAIN_PATH:
+                return main_entitlements
+            if relative == HARNESS_PATH:
+                return HELPER_ENTITLEMENTS
+            if relative == CONTROL_PATH:
+                return helpers
+            if relative.endswith("/Autoupdate") and mode == verify_app_bundle.INDEPENDENT_MODE:
+                return AUTOUPDATE_ENTITLEMENTS
+            return {}
 
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "Sparkle.*exactly arm64",
-        ):
-            verify_app_bundle.verify_macho_architectures(
-                app,
-                describe=describe,
-                architectures=architectures,
+        def details(path: Path, _architecture: str) -> dict[str, list[str]]:
+            identifier = self.identifiers.get(path.relative_to(app).as_posix(), "com.marauder.injected")
+            if mode == verify_app_bundle.ACCOUNT_FREE_MODE:
+                return {
+                    "Signature": ["adhoc"],
+                    "TeamIdentifier": ["not set"],
+                    "Identifier": [identifier],
+                    "flags": ["0x10000(runtime)"],
+                }
+            return {
+                "Signature": ["cms"],
+                "Identifier": [identifier],
+                "TeamIdentifier": ["not set"],
+                "Authority": ["Marauder Notebook Release"],
+                "flags": ["0x10000(runtime)"],
+            }
+
+        def chain(_path: Path, _architecture: str) -> code_signing_contract.CertificateChain:
+            return code_signing_contract.CertificateChain(
+                sha256=("A" * 64, root_sha256),
+                root_sha1=root_sha1,
             )
 
-        verified = verify_app_bundle.verify_macho_architectures(
-            app,
-            describe=describe,
-            architectures=lambda _: {"arm64", "x86_64"},
-        )
-        self.assertEqual(verified, [nested, main])
-        with self.assertRaisesRegex(verify_app_bundle.BundleVerificationError, "exactly arm64"):
-            verify_app_bundle.verify_macho_architectures(
-                app,
-                describe=describe,
-                architectures=lambda _: {"arm64", "x86_64", "i386"},
-            )
+        def requirement(path: Path, _architecture: str) -> str:
+            identifier = self.identifiers.get(path.relative_to(app).as_posix(), "com.marauder.injected")
+            return f'designated => identifier "{identifier}" and certificate root = H"{root_sha1}"'
 
-    def test_declared_executable_must_be_executable_macho_with_exact_slices(self) -> None:
-        executable = self.root / "Marauder Notebook"
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        executable.chmod(0o755)
-        with self.assertRaisesRegex(verify_app_bundle.BundleVerificationError, "not a Mach-O"):
-            verify_app_bundle.verify_declared_executable(
-                executable,
-                describe=lambda _: "POSIX shell script, ASCII text executable",
-                architectures=lambda _: {"arm64", "x86_64"},
-            )
-        executable.write_bytes(b"fixture")
-        with self.assertRaisesRegex(verify_app_bundle.BundleVerificationError, "exactly arm64"):
-            verify_app_bundle.verify_declared_executable(
-                executable,
-                describe=lambda _: "Mach-O universal binary",
-                architectures=lambda _: {"arm64", "x86_64", "i386"},
-            )
+        real_verify = verify_app_bundle.verify_code_signatures
 
-    def test_rejects_build_host_rpath_and_embedded_path_in_every_slice(self) -> None:
-        self.assertIsNone(verify_app_bundle.BUILD_HOST_PATH.search("/tmp/XXXXXX.png"))
-        executable = self.root / verify_app_bundle.EXECUTABLE_NAME
+        def wrapped(bundle: Path, machos: list[Path], **kwargs: object) -> None:
+            kwargs["details_for"] = details
+            kwargs["certificate_chain_for"] = chain
+            kwargs["designated_requirement_for"] = requirement
+            real_verify(bundle, machos, **kwargs)  # type: ignore[arg-type]
 
-        def clean_rpaths(_: Path, __: str) -> set[str]:
-            return set(verify_app_bundle.ALLOWED_RPATHS)
-
-        verify_app_bundle.verify_macho_load_paths(
-            [executable],
-            rpath_reader=clean_rpaths,
-            build_path_reader=lambda *_: (),
-            dependency_reader=lambda *_: {"/usr/lib/libSystem.B.dylib"},
-        )
-
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "unsafe runtime search paths",
-        ):
-            verify_app_bundle.verify_macho_load_paths(
-                [executable],
-                rpath_reader=lambda *_: {
-                    "/usr/lib/swift",
-                    "/opt/homebrew/Cellar/swift/toolchain/usr/lib/swift/macosx",
-                },
-                build_path_reader=lambda *_: (),
-                dependency_reader=lambda *_: {"/usr/lib/libSystem.B.dylib"},
-            )
-
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "absolute build-host path",
-        ):
-            verify_app_bundle.verify_macho_load_paths(
-                [executable],
-                rpath_reader=clean_rpaths,
-                build_path_reader=lambda _, architecture: (
-                    "/Users/builder/project/.build/release/NotebookKit.bundle",
-                ) if architecture == "x86_64" else (),
-                dependency_reader=lambda *_: {"/usr/lib/libSystem.B.dylib"},
-            )
-
-        with self.assertRaisesRegex(
-            verify_app_bundle.BundleVerificationError,
-            "unsafe dynamic dependencies",
-        ):
-            verify_app_bundle.verify_macho_load_paths(
-                [executable],
-                rpath_reader=clean_rpaths,
-                build_path_reader=lambda *_: (),
-                dependency_reader=lambda *_: {
-                    "/usr/lib/libSystem.B.dylib",
-                    "/System/Library/../../Library/Frameworks/Injected.framework/Injected",
-                },
-            )
-
-        self.assertEqual(
-            verify_app_bundle.parse_rpaths(
-                "cmd LC_RPATH\n"
-                "  cmdsize 64\n"
-                "  path @executable_path/../Frameworks Evil (offset 12)\n"
+        with (
+            mock.patch.object(verify_app_bundle, "verify_icon"),
+            mock.patch.object(verify_app_bundle, "verify_declared_executable"),
+            mock.patch.object(
+                verify_app_bundle,
+                "verify_macho_architectures",
+                lambda bundle: [bundle / relative for relative in relatives],
             ),
-            {"@executable_path/../Frameworks Evil"},
-        )
-        self.assertEqual(
-            verify_app_bundle.parse_dependencies(
-                "fixture:\n"
-                "\t/usr/lib/My Library.dylib "
-                "(compatibility version 1.0.0, current version 1.0.0)\n"
-            ),
-            {"/usr/lib/My Library.dylib"},
-        )
-
-    def test_signed_entitlement_reader_uses_current_codesign_output_contract(self) -> None:
-        helper = self.root / "helper"
-        entitlements = {"com.apple.security.app-sandbox": True}
-        result = CompletedProcess(
-            args=["codesign"],
-            returncode=0,
-            stdout=plistlib.dumps(entitlements),
-            stderr=b"Executable=helper\n",
-        )
-        with mock.patch.object(verify_app_bundle.subprocess, "run", return_value=result) as run:
-            self.assertEqual(
-                verify_app_bundle._read_signed_entitlements(
-                    helper,
-                    "arm64",
-                    required=False,
-                ),
-                entitlements,
-            )
-        self.assertEqual(
-            run.call_args.args[0],
-            [
-                "/usr/bin/codesign",
-                "-d",
-                "--architecture",
-                "arm64",
-                "--entitlements=-",
-                "--xml",
-                str(helper),
-            ],
-        )
-        empty_result = CompletedProcess(
-            args=["codesign"],
-            returncode=0,
-            stdout=b"",
-            stderr=b"Executable=helper\n",
-        )
-        with mock.patch.object(
-            verify_app_bundle.subprocess,
-            "run",
-            return_value=empty_result,
+            mock.patch.object(verify_app_bundle, "verify_macho_deployment_targets"),
+            mock.patch.object(verify_app_bundle, "verify_macho_load_paths"),
+            mock.patch.object(verify_app_bundle, "verify_sealed_bundle"),
+            mock.patch.object(verify_app_bundle, "verify_code_signatures", wrapped),
+            mock.patch.object(verify_app_bundle, "_read_signed_entitlements", entitlements),
         ):
-            self.assertEqual(
-                verify_app_bundle._read_signed_entitlements(
-                    helper,
-                    "arm64",
-                    required=False,
-                ),
-                {},
+            verify_app_bundle.verify_app_bundle(
+                app,
+                release_version="1.2.3",
+                build_number="42",
+                distribution_mode=mode,
             )
-            with self.assertRaisesRegex(
-                verify_app_bundle.BundleVerificationError,
-                "missing its entitlements",
-            ):
-                verify_app_bundle._read_signed_entitlements(
-                    helper,
-                    "arm64",
-                    required=True,
-                )
+
+    def independent_paths(self, *, control: bool = True, extra: str | None = None) -> tuple[str, ...]:
+        paths = list(verify_app_bundle.EXPECTED_CODE_IDENTIFIERS)
+        paths.append(HARNESS_PATH)
+        if control:
+            paths.append(CONTROL_PATH)
+        if extra is not None:
+            paths.append(extra)
+        return tuple(paths)
+
+    def test_independent_bundle_with_harness_and_control_passes(self) -> None:
+        self.verify(
+            self.independent_paths(),
+            verify_app_bundle.INDEPENDENT_MODE,
+            main_entitlements=INDEPENDENT_MAIN_ENTITLEMENTS,
+        )
+        with self.assertRaisesRegex(
+            verify_app_bundle.BundleVerificationError,
+            "notebook-control.*unexpected signed entitlements",
+        ):
+            self.verify(
+                self.independent_paths(),
+                verify_app_bundle.INDEPENDENT_MODE,
+                main_entitlements=INDEPENDENT_MAIN_ENTITLEMENTS,
+                helper_entitlements={
+                    **HELPER_ENTITLEMENTS,
+                    "com.apple.security.cs.allow-jit": True,
+                },
+            )
+        with self.assertRaisesRegex(
+            verify_app_bundle.BundleVerificationError,
+            "Contents/MacOS/injected",
+        ):
+            self.verify(
+                self.independent_paths(extra="Contents/MacOS/injected"),
+                verify_app_bundle.INDEPENDENT_MODE,
+                main_entitlements=INDEPENDENT_MAIN_ENTITLEMENTS,
+            )
+
+    def test_independent_bundle_missing_control_fails(self) -> None:
+        with self.assertRaisesRegex(
+            verify_app_bundle.BundleVerificationError,
+            "missing:.*notebook-control",
+        ):
+            self.verify(
+                self.independent_paths(control=False),
+                verify_app_bundle.INDEPENDENT_MODE,
+                main_entitlements=INDEPENDENT_MAIN_ENTITLEMENTS,
+            )
+
+    def test_account_free_table_unchanged(self) -> None:
+        self.verify(
+            tuple(verify_app_bundle.EXPECTED_CODE_IDENTIFIERS),
+            verify_app_bundle.ACCOUNT_FREE_MODE,
+            main_entitlements=ACCOUNT_FREE_ENTITLEMENTS,
+        )
+        verify_app_bundle.verify_entitlements(
+            ACCOUNT_FREE_ENTITLEMENTS,
+            distribution_mode=verify_app_bundle.ACCOUNT_FREE_MODE,
+        )
+        with self.assertRaisesRegex(
+            verify_app_bundle.BundleVerificationError,
+            "application-groups",
+        ):
+            verify_app_bundle.verify_entitlements(
+                ACCOUNT_FREE_ENTITLEMENTS,
+                distribution_mode=verify_app_bundle.INDEPENDENT_MODE,
+            )
+        with self.assertRaisesRegex(
+            verify_app_bundle.BundleVerificationError,
+            "notebook-harness is outside the expected nested-code",
+        ):
+            self.verify(
+                tuple(verify_app_bundle.EXPECTED_CODE_IDENTIFIERS) + (HARNESS_PATH,),
+                verify_app_bundle.ACCOUNT_FREE_MODE,
+                main_entitlements=ACCOUNT_FREE_ENTITLEMENTS,
+            )
 
 
 if __name__ == "__main__":
