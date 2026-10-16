@@ -316,15 +316,16 @@ class IndependentBundleLayoutTests(unittest.TestCase):
         def entitlements(path: Path, _architecture: str, *, required: bool = False) -> dict[str, object]:
             del required
             relative = path.relative_to(app).as_posix()
-            if relative == MAIN_PATH:
-                return main_entitlements
-            if relative == HARNESS_PATH:
-                return HELPER_ENTITLEMENTS
-            if relative == CONTROL_PATH:
-                return helpers
-            if relative.endswith("/Autoupdate") and mode == verify_app_bundle.INDEPENDENT_MODE:
-                return AUTOUPDATE_ENTITLEMENTS
-            return {}
+            table = {
+                MAIN_PATH: main_entitlements,
+                HARNESS_PATH: HELPER_ENTITLEMENTS,
+                CONTROL_PATH: helpers,
+            }
+            if mode == verify_app_bundle.INDEPENDENT_MODE:
+                table["Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate"] = (
+                    AUTOUPDATE_ENTITLEMENTS
+                )
+            return table.get(relative, {})
 
         def details(path: Path, _architecture: str) -> dict[str, list[str]]:
             identifier = self.identifiers.get(path.relative_to(app).as_posix(), "com.marauder.injected")
