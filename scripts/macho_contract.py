@@ -16,12 +16,38 @@ EXECUTABLE_NAME = "Marauder Notebook"
 ALLOWED_RPATHS = {"/usr/lib/swift", "@executable_path/../Frameworks"}
 ALLOWED_NON_SYSTEM_DEPENDENCY = "@rpath/Sparkle.framework/Versions/B/Sparkle"
 BUILD_HOST_PATH = re.compile(
-    r"(?:^|[^A-Za-z0-9_])(?:/Users/|/private/var/|/var/folders/|/opt/homebrew/)"
+    r"(?:^|[^A-Za-z0-9_])(?:/Users/|/private/var/|/var/folders/)"
 )
+HOMEBREW_PREFIX = "/opt/homebrew/"
+ALLOWED_HOMEBREW_SEARCH_LITERALS = ("/opt/homebrew/bin/python3", "/opt/homebrew/bin")
 RPATH_OUTPUT = re.compile(r"^path (.+) \(offset [0-9]+\)$")
 DEPENDENCY_OUTPUT = re.compile(
     r"^(.+) \(compatibility version [^,]+, current version [^)]+\)$"
 )
+
+
+def line_embeds_build_host_path(line: str) -> bool:
+    if BUILD_HOST_PATH.search(line):
+        return True
+    start = 0
+    while True:
+        index = line.find(HOMEBREW_PREFIX, start)
+        if index < 0:
+            return False
+        if index > 0 and line[index - 1] != ":":
+            return True
+        remainder = line[index:]
+        literal = next(
+            (
+                candidate
+                for candidate in ALLOWED_HOMEBREW_SEARCH_LITERALS
+                if remainder == candidate or remainder.startswith(candidate + ":")
+            ),
+            None,
+        )
+        if literal is None:
+            return True
+        start = index + len(literal)
 
 
 def _file_description(path: Path) -> str:
@@ -126,7 +152,7 @@ def _embedded_build_paths(path: Path, architecture: str) -> tuple[str, ...]:
         raise BundleVerificationError(
             f"string inspection failed for {path.name}: {result.stderr.strip()}"
         )
-    return tuple(line for line in result.stdout.splitlines() if BUILD_HOST_PATH.search(line))
+    return tuple(line for line in result.stdout.splitlines() if line_embeds_build_host_path(line))
 
 
 def _dependencies(path: Path, architecture: str) -> set[str]:
@@ -216,9 +242,11 @@ def verify_macho_load_paths(
                     f"{candidate.name} [{architecture}] has unsafe runtime search paths: "
                     + ", ".join(sorted(unexpected))
                 )
-            if build_path_reader(candidate, architecture):
+            build_paths = build_path_reader(candidate, architecture)
+            if build_paths:
                 raise BundleVerificationError(
-                    f"{candidate.name} [{architecture}] contains an absolute build-host path"
+                    f"{candidate.name} [{architecture}] contains an absolute build-host path: "
+                    + repr(build_paths[0])
                 )
             unsafe_dependencies = {
                 dependency
