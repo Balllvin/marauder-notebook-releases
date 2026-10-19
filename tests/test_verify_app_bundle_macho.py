@@ -8,7 +8,7 @@ from pathlib import Path
 from subprocess import CompletedProcess
 from unittest import mock
 
-from scripts import verify_app_bundle
+from scripts import macho_contract, verify_app_bundle
 
 
 class VerifyAppBundleMachOTests(unittest.TestCase):
@@ -196,6 +196,57 @@ class VerifyAppBundleMachOTests(unittest.TestCase):
             {"/usr/lib/My Library.dylib"},
         )
 
+
+    def test_accepts_runtime_homebrew_search_literals_in_every_slice(self) -> None:
+        runtime_literals = (
+            "/opt/homebrew/bin/python3",
+            "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+            "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin",
+        )
+        for literal in runtime_literals:
+            with self.subTest(literal=literal):
+                self.assertFalse(macho_contract.line_embeds_build_host_path(literal))
+
+        executables = [
+            self.root / macho_contract.EXECUTABLE_NAME,
+            self.root / "notebook-control",
+        ]
+        inspected: list[tuple[str, str]] = []
+
+        def rejected_strings(candidate: Path, architecture: str) -> tuple[str, ...]:
+            inspected.append((candidate.name, architecture))
+            return tuple(
+                line
+                for line in runtime_literals
+                if macho_contract.line_embeds_build_host_path(line)
+            )
+
+        macho_contract.verify_macho_load_paths(
+            executables,
+            rpath_reader=lambda *_: set(macho_contract.ALLOWED_RPATHS),
+            build_path_reader=rejected_strings,
+            dependency_reader=lambda *_: {"/usr/lib/libSystem.B.dylib"},
+        )
+        self.assertEqual(
+            inspected,
+            [
+                (executable.name, architecture)
+                for executable in executables
+                for architecture in ("arm64", "x86_64")
+            ],
+        )
+
+    def test_rejects_homebrew_path_glued_to_allowed_literal(self) -> None:
+        for line in (
+            "/opt/homebrew/bin/foo",
+            "/opt/homebrew/binX",
+            "/opt/homebrew/bin:/opt/homebrew/lib/x",
+            " /opt/homebrew/bin",
+            "/opt/homebrew/Cellar/swift/usr/lib",
+            "x/opt/homebrew/bin",
+        ):
+            with self.subTest(line=line):
+                self.assertTrue(macho_contract.line_embeds_build_host_path(line))
 
     def test_signed_entitlement_reader_uses_current_codesign_output_contract(self) -> None:
         helper = self.root / "helper"
