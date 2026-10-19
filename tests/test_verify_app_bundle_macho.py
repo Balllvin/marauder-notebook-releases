@@ -196,7 +196,6 @@ class VerifyAppBundleMachOTests(unittest.TestCase):
             {"/usr/lib/My Library.dylib"},
         )
 
-
     def test_accepts_runtime_homebrew_search_literals_in_every_slice(self) -> None:
         runtime_literals = (
             "/opt/homebrew/bin/python3",
@@ -247,6 +246,26 @@ class VerifyAppBundleMachOTests(unittest.TestCase):
         ):
             with self.subTest(line=line):
                 self.assertTrue(macho_contract.line_embeds_build_host_path(line))
+
+        strings_output = CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="/opt/homebrew/bin/python3\n/opt/homebrew/bin/foo\n/usr/lib/swift\n",
+            stderr="",
+        )
+        with mock.patch.object(macho_contract.subprocess, "run", return_value=strings_output):
+            embedded = macho_contract._embedded_build_paths(self.root / "binary", "arm64")
+        self.assertEqual(embedded, ("/opt/homebrew/bin/foo",))
+        with self.assertRaisesRegex(
+            macho_contract.BundleVerificationError,
+            "contains an absolute build-host path: '/opt/homebrew/bin/foo'",
+        ):
+            macho_contract.verify_macho_load_paths(
+                [self.root / macho_contract.EXECUTABLE_NAME],
+                rpath_reader=lambda *_: set(macho_contract.ALLOWED_RPATHS),
+                build_path_reader=lambda *_: embedded,
+                dependency_reader=lambda *_: {"/usr/lib/libSystem.B.dylib"},
+            )
 
     def test_signed_entitlement_reader_uses_current_codesign_output_contract(self) -> None:
         helper = self.root / "helper"

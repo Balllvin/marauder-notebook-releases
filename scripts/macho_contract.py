@@ -242,9 +242,11 @@ def verify_macho_load_paths(
                     f"{candidate.name} [{architecture}] has unsafe runtime search paths: "
                     + ", ".join(sorted(unexpected))
                 )
-            if build_path_reader(candidate, architecture):
+            build_paths = build_path_reader(candidate, architecture)
+            if build_paths:
                 raise BundleVerificationError(
-                    f"{candidate.name} [{architecture}] contains an absolute build-host path"
+                    f"{candidate.name} [{architecture}] contains an absolute build-host path: "
+                    + repr(build_paths[0])
                 )
             unsafe_dependencies = {
                 dependency
